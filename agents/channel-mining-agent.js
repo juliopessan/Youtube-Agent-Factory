@@ -2,6 +2,10 @@ const fs = require('fs').promises;
 const path = require('path');
 const { Logger } = require('../utils/logger');
 const { AITextService } = require('../utils/ai-text-service');
+const {
+  OUTLIER_MULTIPLIER, nicheInfo, groupByNiche, validateNiches, buildLanguagePlan,
+  analyzePositioning, renderStrategyMarkdown
+} = require('../utils/niche-intelligence');
 
 // Mineração de canais dark: reproduces the manual YouTube research routine
 // (Tipo: Vídeo | Duração: Mais de 20 min | Upload: Esta semana) through the
@@ -22,23 +26,9 @@ const LANGUAGES = {
   it: 'Italiano'
 };
 
-// Rough long-form RPM bands (USD) used for the Observações column.
-const NICHE_CPM = [
-  { match: /financ|dinheiro|money|invest|crypto|econom|negóci|business/i, niche: 'Finanças', rpm: '$10-15', cpm: 'alto' },
-  { match: /tecnolog|tech|ia\b|\bai\b|software|program/i, niche: 'Tecnologia', rpm: '$6-10', cpm: 'alto' },
-  { match: /saúde|health|psicolog|psycholog|mente|mind/i, niche: 'Saúde / Psicologia', rpm: '$5-9', cpm: 'médio-alto' },
-  { match: /hist|mist|myster|ancient|civiliza|guerra|war/i, niche: 'História / Mistérios', rpm: '$4-7', cpm: 'médio' },
-  { match: /ciênc|scienc|oceano|ocean|espaço|space|universo|fato|facts|curios/i, niche: 'Curiosidades / Ciência', rpm: '$4-7', cpm: 'médio' },
-  { match: /jardin|garden|plant|árvore|tree|natureza|nature/i, niche: 'Jardinagem / Natureza', rpm: '$3-6', cpm: 'médio' },
-  { match: /receit|recipe|cozinh|cook|culinár|food/i, niche: 'Culinária / Receitas', rpm: '$2-4', cpm: 'baixo' },
-  { match: /relax|sleep|dormir|music|música|ambient|asmr/i, niche: 'Relaxamento / Ambiente', rpm: '$1-3', cpm: 'baixo' }
-];
-
 // Title/description hints that a channel is personality-led rather than dark.
 const FACE_HINTS = /\b(vlog|eu fui|i tried|my life|minha vida|reagindo|reacting|reaction|podcast ep|entrevista|interview|ft\.|feat\.)\b/i;
 const DARK_HINTS = /\b(documentár|documentary|explained|explicado|fatos|facts|história|history|mistér|myster|compilation|curiosidades|top \d+|\d+ (coisas|things|fatos))\b/i;
-
-const OUTLIER_MULTIPLIER = 3;
 
 function parseIsoDuration(iso) {
   const match = /^P(?:(\d+)D)?T?(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$/.exec(String(iso || ''));
@@ -99,10 +89,6 @@ function detectDarkSignals({ channel, videos }) {
   return { score, isLikelyDark: score >= 1, young: Boolean(young), viewsPerSub };
 }
 
-function nicheInfo(text) {
-  return NICHE_CPM.find(entry => entry.match.test(text)) || { niche: 'Geral', rpm: '$2-5', cpm: 'médio' };
-}
-
 // Competition of the same theme in another language → multilingual opportunity.
 function rateMultilingual(languageChecks) {
   const gaps = languageChecks.filter(check => check.strongChannels === 0);
@@ -125,7 +111,7 @@ function describeLanguageAvailability(languageChecks) {
 
 const CSV_COLUMNS = [
   ['index', 'Nº'], ['term', 'TERMO PESQUISADO'], ['channelTitle', 'CANAL ENCONTRADO'],
-  ['subscribersLabel', 'INSCRITOS'], ['niche', 'NICHO / SUB-NICHO'], ['avgViewsLabel', 'MÉDIA DE VIEWS'],
+  ['subscribersLabel', 'INSCRITOS'], ['nicheLabel', 'NICHO / SUB-NICHO'], ['avgViewsLabel', 'MÉDIA DE VIEWS'],
   ['outlierTitle', 'VÍDEO OUTLIER (TÍTULO)'], ['outlierViewsLabel', 'VIEWS DO OUTLIER'], ['model', 'MODELO'],
   ['originalLanguage', 'IDIOMA ORIGINAL'], ['otherLanguages', 'EXISTE EM OUTROS IDIOMAS?'],
   ['opportunity', 'OPORTUNIDADE MULTILÍNGUE'], ['notes', 'OBSERVAÇÕES']
@@ -139,6 +125,10 @@ function toCSV(rows) {
   const header = CSV_COLUMNS.map(([, label]) => label).join(';');
   const lines = rows.map((row, i) => CSV_COLUMNS.map(([key]) => escape(key === 'index' ? i + 1 : row[key])).join(';'));
   return `\uFEFF${[header, ...lines].join('\n')}\n`;
+}
+
+function extractJson(text) {
+  return JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1));
 }
 
 class ChannelMiningAgent {
@@ -206,7 +196,7 @@ class ChannelMiningAgent {
 
   async getChannels(channelIds) {
     if (!channelIds.length) return [];
-    const response = await this.getYouTube().channels.list({ part: 'snippet,statistics,contentDetails', id: channelIds.slice(0, 50).join(',') });
+    const response = await this.getYouTube().channels.list({ part: 'snippet,statistics,contentDetails,topicDetails,brandingSettings', id: channelIds.slice(0, 50).join(',') });
     return (response.data.items || []).map(channel => ({
       channelId: channel.id,
       title: channel.snippet?.title,
@@ -216,6 +206,8 @@ class ChannelMiningAgent {
       publishedAt: channel.snippet?.publishedAt,
       subscribers: Number(channel.statistics?.subscriberCount) || 0,
       videoCount: Number(channel.statistics?.videoCount) || 0,
+      keywords: channel.brandingSettings?.channel?.keywords || '',
+      topics: (channel.topicDetails?.topicCategories || []).map(url => decodeURIComponent(String(url).split('/').pop()).replace(/_/g, ' ')),
       uploadsPlaylistId: channel.contentDetails?.relatedPlaylists?.uploads,
       url: `https://www.youtube.com/channel/${channel.id}`
     }));
@@ -235,8 +227,7 @@ class ChannelMiningAgent {
     try {
       const prompt = `Traduza o termo de busca do YouTube "${term}" para os idiomas ${languages.join(', ')} como um nativo pesquisaria. Responda apenas JSON no formato {"en":"..."}.`;
       const text = await this.aiTextService.generateText(prompt, { maxTokens: 300, temperature: 0.2 });
-      const parsed = JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1));
-      return { ...fallback, ...parsed };
+      return { ...fallback, ...extractJson(text) };
     } catch (error) {
       this.logger.warn(`Term translation failed, reusing original term: ${error.message}`);
       return fallback;
@@ -280,7 +271,7 @@ class ChannelMiningAgent {
     const originalLanguage = (channel.language || videos.find(v => v.language)?.language || searchLanguage || 'pt').slice(0, 2);
     const languageChecks = await this.checkOtherLanguages(term, originalLanguage, { languages, minViews });
     const opportunity = rateMultilingual(languageChecks);
-    const niche = nicheInfo(`${term} ${channel.title} ${channel.description} ${videos.map(v => v.title).join(' ')}`);
+    const niche = nicheInfo([term, channel.title, channel.description, channel.keywords, ...channel.topics, ...videos.map(v => v.title)].join(' '));
 
     return {
       term,
@@ -290,6 +281,10 @@ class ChannelMiningAgent {
       subscribers: channel.subscribers,
       subscribersLabel: formatCount(channel.subscribers),
       niche: niche.niche,
+      microNiche: niche.microNiche,
+      nicheLabel: niche.microNiche ? `${niche.niche} / ${niche.microNiche}` : niche.niche,
+      rpm: niche.rpm,
+      topTitles: [...videos].sort((a, b) => b.views - a.views).slice(0, 5).map(v => v.title),
       avgViews: Math.round(avgViews),
       avgViewsLabel: formatNumber(avgViews),
       outlierTitle: outlier?.title || '',
@@ -361,19 +356,102 @@ class ChannelMiningAgent {
     return file;
   }
 
-  // Hand-off to the factory: high-opportunity outliers become content ideas
-  // (translated into the gap language) for the strategy → script pipeline.
-  async promoteToIdeas(rows, { minLevel = 'ALTA' } = {}) {
+  async translateTitles(title, languages) {
+    if (!languages.length || (!this.aiTextService?.client && !this.aiTextService?.gemini)) return {};
+    try {
+      const prompt = `Adapte o título de YouTube "${title}" para os idiomas ${languages.join(', ')}, como um criador nativo escreveria (mesmo gancho, sem tradução literal, até 90 caracteres). Responda apenas JSON no formato {"en":"..."}.`;
+      return extractJson(await this.aiTextService.generateText(prompt, { maxTokens: 500, temperature: 0.5 }));
+    } catch (error) {
+      this.logger.warn(`Title adaptation failed: ${error.message}`);
+      return {};
+    }
+  }
+
+  async generatePositioning(niche, heuristic) {
+    if (!this.aiTextService?.client && !this.aiTextService?.gemini) return null;
+    try {
+      const prompt = `Você é estrategista de canais dark do YouTube (sem rosto). Nicho: ${niche.label} (RPM ${niche.rpm}, veredito ${niche.verdict}).
+Ângulos saturados: ${heuristic.saturatedAngles.map(a => a.term).join(', ') || 'nenhum identificado'}.
+Fórmulas de título dominantes: ${heuristic.titleFormulas.map(f => f.label).join(', ') || 'nenhuma'}.
+Barreira de entrada: ${heuristic.entryBarrier}. Idiomas sem concorrência: ${heuristic.gapLanguages.join(', ') || 'nenhum'}.
+Responda apenas JSON: {"positioning":"1 frase","differentiators":["3 itens"],"pillars":["3 pilares de conteúdo"],"titleFormulas":["3 fórmulas novas"],"channelNames":["3 nomes"],"avoid":["2 armadilhas"]}`;
+      return extractJson(await this.aiTextService.generateText(prompt, { maxTokens: 900, temperature: 0.7 }));
+    } catch (error) {
+      this.logger.warn(`Positioning generation failed for ${niche.label}: ${error.message}`);
+      return null;
+    }
+  }
+
+  /**
+   * Turn mined rows into the three strategy modules: niche validation with RPM,
+   * the multilingual outlier plan, and positioning/differentiation.
+   */
+  async strategize(rows, { useAI = true } = {}) {
+    const niches = validateNiches(rows);
+
+    const multilingualPlans = [];
+    const candidates = rows.filter(r => r.outlierRatio >= OUTLIER_MULTIPLIER && r.opportunityLevel !== 'BAIXA');
+    for (const row of candidates) {
+      const base = buildLanguagePlan(row);
+      if (!base) continue;
+      const translations = useAI ? await this.translateTitles(row.outlierTitle, base.targets.map(t => t.language)) : {};
+      multilingualPlans.push(buildLanguagePlan(row, translations));
+    }
+    multilingualPlans.sort((a, b) => b.targets[0].priority - a.targets[0].priority);
+
+    const groups = new Map(groupByNiche(rows).map(group => [group.key, group]));
+    const positioning = [];
+    for (const niche of niches.filter(n => n.verdict !== 'EVITAR')) {
+      const heuristic = analyzePositioning(groups.get(niche.key).rows);
+      positioning.push({ niche: niche.label, ...heuristic, ai: useAI ? await this.generatePositioning(niche, heuristic) : null });
+    }
+
+    return { generatedAt: this.now().toISOString(), niches, multilingualPlans, positioning };
+  }
+
+  async exportStrategy(strategy, basename) {
+    await fs.mkdir(this.reportsDir, { recursive: true });
+    const name = basename || `estrategia-${this.now().toISOString().slice(0, 10)}`;
+    const markdown = path.join(this.reportsDir, `${name}.md`);
+    await fs.writeFile(markdown, renderStrategyMarkdown(strategy), 'utf8');
+    await fs.writeFile(path.join(this.reportsDir, `${name}.json`), JSON.stringify(strategy, null, 2), 'utf8');
+    return markdown;
+  }
+
+  // Latest result per channel across previous mining runs.
+  async loadStoredRows(limit = 500) {
+    const stored = this.db?.listChannelMiningResults ? await this.db.listChannelMiningResults(limit) : [];
+    const latest = new Map();
+    for (const row of stored) if (!latest.has(row.channelId)) latest.set(row.channelId, row);
+    return [...latest.values()];
+  }
+
+  // Hand-off to the factory: ALTA outliers become backlog ideas, one per gap
+  // language when a plan exists (translated title), otherwise one in the source language.
+  async promoteToIdeas(rows, { minLevel = 'ALTA', plans = [], maxLanguages = 2 } = {}) {
     if (!this.db?.createContentIdea) return [];
     const accept = minLevel === 'MÉDIA' ? ['ALTA', 'MÉDIA'] : ['ALTA'];
     const ideas = [];
     for (const row of rows.filter(r => accept.includes(r.opportunityLevel) && r.outlierTitle)) {
+      const context = `Mineração: ${row.channelTitle} (${row.outlierViewsLabel} views, ${row.outlierRatio}x). ${row.notes}`;
+      const plan = plans.find(p => p.channelId === row.channelId);
+      if (plan) {
+        for (const target of plan.targets.slice(0, maxLanguages)) {
+          ideas.push(await this.db.createContentIdea({
+            topic: target.title.slice(0, 200),
+            angle: `Versão ${target.language.toUpperCase()}: ${target.searchTerm}`,
+            style: row.model === 'M1' ? 'documentary' : 'listicle',
+            rationale: `${context}${target.needsTranslation ? ' Título original: adaptar para o idioma-alvo.' : ''}`
+          }));
+        }
+        continue;
+      }
       const gap = row.languageChecks.find(c => c.strongChannels === 0);
       ideas.push(await this.db.createContentIdea({
         topic: row.outlierTitle.slice(0, 200),
         angle: gap ? `Versão ${gap.language.toUpperCase()}: ${gap.term}` : null,
         style: row.model === 'M1' ? 'documentary' : 'listicle',
-        rationale: `Mineração: ${row.channelTitle} (${row.outlierViewsLabel} views, ${row.outlierRatio}x). ${gap ? `Lacuna em ${gap.language.toUpperCase()}: "${gap.term}". ` : ''}${row.notes}`
+        rationale: context
       }));
     }
     return ideas;
@@ -412,6 +490,9 @@ if (require.main === module) {
     const file = await agent.exportCSV(rows);
     console.table(rows.map(r => ({ canal: r.channelTitle, inscritos: r.subscribersLabel, outlier: r.outlierViewsLabel, modelo: r.model, oportunidade: r.opportunity })));
     console.log(`Planilha salva em ${file}`);
+    const strategy = await agent.strategize(rows, { useAI: process.env.MINING_AI !== 'false' });
+    console.table(strategy.niches.map(n => ({ nicho: n.label, canais: n.channels, rpm: n.rpm, score: n.score, veredito: n.verdict })));
+    console.log(`Estratégia salva em ${await agent.exportStrategy(strategy)}`);
     await db.close();
   })().catch(error => {
     console.error(error);

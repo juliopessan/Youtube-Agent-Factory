@@ -49,6 +49,7 @@ class SystemTest {
       { name: 'Slideshow Renderer', test: () => this.testSlideshowRenderer() },
       { name: 'Evergreen Template Topics', test: () => this.testEvergreenTopics() },
       { name: 'Dark Channel Mining', test: () => this.testChannelMining() },
+      { name: 'Niche Validation and Positioning', test: () => this.testNicheIntelligence() },
       { name: 'Walkthrough Module', test: () => this.testWalkthroughModule() },
       { name: 'Logger System', test: () => this.testLogger() },
       { name: 'Directory Structure', test: () => this.testDirectories() },
@@ -2790,6 +2791,54 @@ class SystemTest {
     if (!toCSV(rows).includes('OPORTUNIDADE MULTILÍNGUE')) throw new Error('CSV header missing');
 
     this.logger.info('Channel mining test completed successfully');
+  }
+
+  async testNicheIntelligence() {
+    const { nicheInfo, rpmTable, validateNiches, buildLanguagePlan, analyzePositioning, renderStrategyMarkdown } = require('./utils/niche-intelligence');
+    const { ChannelMiningAgent } = require('./agents/channel-mining-agent');
+
+    const money = nicheInfo('psicologia do dinheiro armadilhas mentais');
+    if (money.niche !== 'Finanças' || money.microNiche !== 'Psicologia do dinheiro' || money.rpm !== '$10-15') {
+      throw new Error(`Unexpected niche classification: ${JSON.stringify(money)}`);
+    }
+    if (!rpmTable().some(entry => entry.niche === 'Culinária / Receitas' && entry.rpm === '$2-4')) throw new Error('RPM table is missing a niche');
+
+    const make = (over) => ({
+      channelId: 'c', channelTitle: 'Canal', niche: 'Finanças', microNiche: 'Psicologia do dinheiro', subscribers: 32000, avgViews: 55000,
+      outlierTitle: '5 armadilhas mentais que te mantêm pobre', outlierUrl: 'u', outlierViews: 890000, outlierRatio: 16, model: 'M1',
+      originalLanguage: 'Português', opportunityLevel: 'ALTA', topTitles: ['5 armadilhas mentais do dinheiro', 'Como a mente sabota o dinheiro'],
+      languageChecks: [{ language: 'de', term: 'Geldpsychologie', strongChannels: 0 }, { language: 'en', term: 'money psychology', strongChannels: 4 }], ...over
+    });
+    const rich = [make({ channelId: 'a' }), make({ channelId: 'b' }), make({ channelId: 'c' })];
+    const weak = [make({ channelId: 'd', niche: 'Culinária / Receitas', microNiche: null, subscribers: 900000, avgViews: 20000, outlierRatio: 1.2, opportunityLevel: 'BAIXA' })];
+    const niches = validateNiches([...rich, ...weak]);
+    if (niches[0].niche !== 'Finanças' || niches[0].verdict !== 'VALIDADO') throw new Error(`Finance niche should validate: ${JSON.stringify(niches[0])}`);
+    if (niches[niches.length - 1].verdict !== 'EVITAR') throw new Error('Saturated low-RPM niche must be avoided');
+    if (niches[0].estimatedMonthlyRevenue !== Math.round(55000 * 8 * 12.5 / 1000)) throw new Error('Revenue estimate is wrong');
+
+    const plan = buildLanguagePlan(rich[0], { de: 'Die 5 Denkfallen, die dich arm halten' });
+    if (plan.targets.length !== 1 || plan.targets[0].language !== 'de' || plan.targets[0].needsTranslation) throw new Error('Plan should target only the uncontested language');
+    if (buildLanguagePlan(rich[0]).targets[0].needsTranslation !== true) throw new Error('Untranslated targets must be flagged');
+    if (buildLanguagePlan(make({ languageChecks: [{ language: 'en', term: 'x', strongChannels: 5 }] }))) throw new Error('Saturated languages must not produce a plan');
+
+    const positioning = analyzePositioning(rich);
+    if (!positioning.saturatedAngles.some(angle => angle.term.includes('armadilhas'))) throw new Error('Repeated title angle must be flagged as saturated');
+    if (!positioning.gapLanguages.includes('de') || positioning.entryBarrier.indexOf('baixa') !== 0) throw new Error('Positioning ignored language gaps or entry barrier');
+
+    const agent = new ChannelMiningAgent(null, {}, { aiTextService: {}, now: () => new Date('2026-10-24T12:00:00Z') });
+    const strategy = await agent.strategize([...rich, ...weak], { useAI: false });
+    if (strategy.multilingualPlans.length !== 3 || strategy.positioning.length !== 1) throw new Error('Strategy should plan 3 outliers and position only viable niches');
+    const markdown = renderStrategyMarkdown(strategy);
+    for (const heading of ['## 1. Validação de nicho', '## 2. Estratégia do outlier multilíngue', '## 3. Posicionamento e diferenciação']) {
+      if (!markdown.includes(heading)) throw new Error(`Report is missing "${heading}"`);
+    }
+
+    const created = [];
+    const promoter = new ChannelMiningAgent({ createContentIdea: async idea => created.push(idea) }, {}, { aiTextService: {} });
+    await promoter.promoteToIdeas([rich[0]], { plans: [plan] });
+    if (created.length !== 1 || !created[0].topic.startsWith('Die 5') || !created[0].angle.startsWith('Versão DE')) throw new Error('Ideas must use the adapted title per gap language');
+
+    this.logger.info('Niche intelligence test completed successfully');
   }
 
   async testWalkthroughModule() {

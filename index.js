@@ -1209,10 +1209,29 @@ class YouTubeAutomationAgent {
       try {
         const rows = await this.agents.channelMining.mine(terms, req.body?.options || {});
         const csv = await this.agents.channelMining.exportCSV(rows);
-        const ideas = req.body?.promote ? await this.agents.channelMining.promoteToIdeas(rows) : [];
-        return res.json({ success: true, result: { rows, csv: path.relative(__dirname, csv), ideas } });
+        const strategy = req.body?.strategy || req.body?.promote
+          ? await this.agents.channelMining.strategize(rows, { useAI: req.body?.useAI !== false })
+          : null;
+        const ideas = req.body?.promote
+          ? await this.agents.channelMining.promoteToIdeas(rows, { plans: strategy.multilingualPlans })
+          : [];
+        return res.json({ success: true, result: { rows, csv: path.relative(__dirname, csv), strategy, ideas } });
       } catch (error) {
         this.logger.error('Channel mining failed:', error);
+        return res.status(502).json({ error: error.message });
+      }
+    });
+
+    this.app.post('/api/mining/strategy', protect, async (req, res) => {
+      if (!this.agents.channelMining) return res.status(503).json({ error: 'Channel mining agent is not configured' });
+      try {
+        const rows = await this.agents.channelMining.loadStoredRows();
+        if (!rows.length) return res.status(404).json({ error: 'No mined channels yet. Run /api/mining/run first' });
+        const strategy = await this.agents.channelMining.strategize(rows, { useAI: req.body?.useAI !== false });
+        const report = await this.agents.channelMining.exportStrategy(strategy);
+        return res.json({ success: true, result: { strategy, report: path.relative(__dirname, report) } });
+      } catch (error) {
+        this.logger.error('Mining strategy failed:', error);
         return res.status(502).json({ error: error.message });
       }
     });
