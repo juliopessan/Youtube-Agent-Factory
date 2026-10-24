@@ -1,59 +1,96 @@
-# AgentTube - ECGHuNZSECqTXabaLjkVrTEnguiNZLkKF1qi8oBGpump
+# YouTube Agent Factory
 
-**The open-source AI agent that runs a YouTube channel end to end.**
+**An approval-first AI factory that finds a niche worth entering, makes the video on your own machine, and proves the result is real before anything is published.**
 
-Research topics → write scripts → generate narration and visuals → assemble videos → optimize metadata → review → schedule → publish → learn from analytics and from what your audience says.
+```
+Niche evidence  →  Script + storyboard  →  Voice or music  →  SOP editor  →  Verified report  →  Your approval
+```
 
-[![CI](https://github.com/darkzOGx/youtube-automation-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/darkzOGx/youtube-automation-agent/actions/workflows/ci.yml)
+*Instead of an AI that hands you a draft and hopes, every stage leaves a file that a check opens and measures.*
+
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Node.js 18+](https://img.shields.io/badge/node-18%2B-43853d.svg)](package.json)
+[![Node.js 22](https://img.shields.io/badge/node-22-43853d.svg)](package.json)
 
-## What's new on master
+Built on [darkzOGx/youtube-automation-agent](https://github.com/darkzOGx/youtube-automation-agent) (MIT), the research, scheduling, analytics and audience-engagement agents are that project's work. This repository adds the factory around them.
 
-- **v2.10.0 is now on master:** DarkzSEO discoverability audits, controlled growth experiments, and outcome-aware channel operation are available together in the approval-first workflow.
+---
 
-### September 21, 2026 reliability hotfixes
+## Act 1 · The scene today
 
-The latest production fixes are included in [`124a1ed`](https://github.com/darkzOGx/youtube-automation-agent/commit/124a1ed18e474878d5829812dd632e579adbd860) and [`d52b40d`](https://github.com/darkzOGx/youtube-automation-agent/commit/d52b40d94a007caf5e7f256378c0265ddcf09d2b):
+Making one video is not one job, it is six: choosing a niche that pays, writing a script that does not read as mass-produced, recording a voice, editing to a consistent standard, cutting Shorts, and doing all of it inside YouTube's rules on inauthentic content. The text-generation part is the quick one. The hours go into the hand-offs.
 
-- **DarkzSEO works without Python:** the bundled advisory audit is now the default. AgentTube no longer auto-selects sibling Python checkouts, and a missing or broken explicitly configured external runtime falls back to the bundled audit instead of reporting `No module named darkzseo`.
-- **Narration repairs keep correct timing:** regenerated narration updates the scene duration from the replacement audio, preventing stale timing and long silent gaps after a rebuild.
-- **Cleaner spoken narration:** internal CTA metadata and bracketed placeholders are excluded from speech, including placeholders that appear in the middle of a line.
-- **Configured visual styles are respected:** scene generation and repair prompts no longer force the `ethereal` style when the channel uses another visual direction.
-- **Complete scheduling controls:** Review Studio can reschedule a production, publish it now, or delete its schedule without deleting the generated content. Immediate uploads also use the correct YouTube publishing metadata.
-- **Reliable desktop YouTube authorization:** OAuth uses the exact dynamically selected loopback address and port, while legacy hardcoded callback settings are normalized automatically.
-- **Null-safe content generation:** a missing `strategyContext` no longer crashes content generation while reading its angle or keywords.
+The pipeline below is how an AI-assisted channel runs without this project: each stage exists, and a person stitches them together.
 
-These paths are covered by the 46-test system suite. Existing safety gates still block simulated video, missing narration, unresolved factual claims, and unconfirmed media rights from publishing.
+```mermaid
+flowchart LR
+    R[Research] --> S[Script] --> V[Voice and visuals] --> E[Edit] --> Q[Review] --> P[Publish] --> L[Learn]
+    L -.-> R
+```
 
-## What's new in v2.10.0
+> **The limit:** the pipeline stopped at an assembled slideshow. Nothing said whether a niche was worth entering, the edit followed no standard, "it worked" meant a job status and not a file, and without paid API keys there was no video at all.
 
-**AgentTube now has a discoverability adapter layer.** v2.10.0 connects the production pipeline to DarkzSEO without merging the projects or weakening human review, then adds the evidence needed to prove what packaging and strategy actually work:
+## Act 2 · What changes
 
-- **DarkzSEO Discoverability Preflight:** send a canonical content package—not the private dashboard—through versioned GEO, AIO, AEO, and web-search checks after metadata and provenance are assembled.
-- **Reviewable evidence:** persist stable rule IDs, severity, engine/schema identity, fingerprints, and operator decisions in SQLite. Keep a finding actionable or dismiss a false positive with a reason that carries into matching future audits.
-- **Safe local adapter boundary:** run the bundled content checks without Python; optional external DarkzSEO checkouts still use JSON-only stdin/stdout without a shell or inherited API secrets.
-- **Controlled Growth Experiments Studio:** rotate only approved title/thumbnail arms, measure real interval evidence, restore the control, and require a separate decision before adopting a winner.
-- **Outcome & ROI Studio:** align the operator with a measurable KPI, target window, budget, and available revenue/cost evidence without converting missing economics into false zeroes.
-- **Platform-ready foundation:** audits already retain their target platform, providing the durable contract for planned TikTok and Instagram/Reels publishing and analytics adapters.
+The approval-first backbone stays exactly as it was: scripts are reviewed, rights are confirmed, and nothing is scheduled until a person says so. What changes is what happens around it. Highlighted below are the stages this project replaces or adds; the grey ones are untouched.
 
-The content preflight works out of the box. Set `DARKZSEO_PATH` only when developing against a separate DarkzSEO 1.4+ checkout. If that optional external runtime is missing or broken, AgentTube automatically uses the bundled audit.
+```mermaid
+flowchart LR
+    R[Research]:::new --> S[Script]:::new --> V[Voice and visuals]:::new --> E[Edit]:::new --> Q[Review]:::new --> P[Publish] --> L[Learn]
+    L -.-> R
+    E --> SH[Shorts]:::new
+    classDef new fill:#FF5800,stroke:#C43E00,color:#fff
+```
 
-See the complete release history in [CHANGELOG.md](CHANGELOG.md).
+| Stage | Before | Now |
+| --- | --- | --- |
+| **Research** | Trend lookup | Dark-channel mining, niche and micro-niche validation with RPM, a multilingual outlier plan per language gap, positioning and differentiation (`npm run agent:mining`) |
+| **Script** | A script | A narration-aligned storyboard (Hook, Re-hook, Meat, CTA) plus the Modelo 2 compliance checklist, so the three steps that must stay human are named, not hidden |
+| **Voice and visuals** | Paid TTS or nothing | Free local neural narration (Kokoro: Portuguese, English, Spanish, French, Italian) or, for music channels, original ambient music composed on the machine; animated backdrops when no footage provider is configured |
+| **Edit** | Slideshow | An editor that follows SOP-EDV-001: scene cadence, hook inside 7 s, burned text moments, audio levels, a 20 s end screen and a 2-pass H.264 1080p export, named `[Data]_[NumeroVideo]_[TemaCurto].mp4` |
+| **Review** | Job status | A verification step that opens the real files and measures video streams, loudness, brightness, thumbnail text area and Shorts size |
+| **Shorts** | Evenly spaced cuts | Best-moment clipping: sentence-aligned windows scored on hook, facts, questions, twists and endings |
 
-- **Self-hosted:** your credentials, media, and channel data stay under your control.
-- **Approval-first:** nothing is scheduled until quality, rights, and human-review gates pass by default.
-- **Strategy-driven:** give the Autonomous Channel Operator an objective, audience, pillars, cadence, and guardrails; it turns them into researched content plans and production runs.
-- **Provider-flexible:** use Gemini, OpenAI, OpenRouter, Kimi, MiMo, GLM, or another OpenAI-compatible text endpoint, plus Seedance, MiniMax H3, Gemini Omni Flash, Kling, Wan, or local FFmpeg for video.
-- **Observable:** follow persistent generation jobs, failures, review state, publishing, and local activation milestones from the dashboard.
+Three guarantees hold in every mode. **Nothing is uploaded offline** (`--offline`). **Simulated output cannot enter approval or publishing.** **Everything advisory stays advisory**: only the three human interventions block in strict mode.
 
-<!-- Launch gate: add only a real 30–45 second dashboard demo captured from a verified end-to-end run. -->
+## Act 3 · The result
+
+A channel can now go from an idea to a reviewed video with no API key and no upload, on one machine, and the report says which parts were measured.
+
+- **A video exists even with no keys.** The free voice, the generated music and the animated backdrops are enough for a real MP4.
+- **"Done" is evidence.** The report lists what was opened and measured, and a check that cannot see its target fails instead of passing quietly.
+- **Compliance is part of the build.** The checklist runs inside the quality gate, and the steps that need a human are listed instead of being automated away.
+- **Two channel types.** Narrated explainers (the dark-channel playbook) and wellness music (sleep, calm, focus, meditation, morning) share the same pipeline.
+
+### Proof, measured in this repository
+
+Both runs were `--offline --isolated`: no AI key, nothing uploaded.
+
+| | Narrated explainer (pt-BR) | Wellness music ("Deep Sleep Music") |
+| --- | --- | --- |
+| Script | `examples/scripts/armadilhas-mentais.json` | Template writer |
+| Voice or music | Kokoro `pf_dora`, 240.5 s synthesised in about 78 s | Ambient synth, -18.7 LUFS integrated |
+| Video | 1920x1080 H.264 | 1920x1080, 240 s, 105.4 MB, 6 scenes, 3 s crossfades |
+| Quality gate | 28/32; the 3 open items are the human interventions | 21/21 |
+| Shorts | Drafted | 3/3 rendered at 1080x1920 |
+| Thumbnail | Covered by the test suite | 1280x720, text 6.6% of the frame (SOP limit 7%) |
+
+The test suite has 57 tests (`npm test`).
+
+### Honest limits
+
+- Audio was measured (LUFS, peak, spectrogram), never listened to. **Listen before you publish.**
+- The wellness backdrops are soft gradients with a title card. They are tuned dark for a bedroom; they are not footage.
+- No AI key was available, so AI-written scripts, the AI re-rank of Shorts, and paid clip providers (Seedance, MiniMax, Kling, Wan) were not exercised here.
+- The upload path was not exercised against a live YouTube channel. Offline mode never touches it.
+- The slideshow renderer needs a Playwright Chromium revision that must match the project's pinned version; the new editor does not use a browser.
+
+---
 
 ## Quick start
 
 ```bash
-git clone https://github.com/darkzOGx/youtube-automation-agent.git
-cd youtube-automation-agent
+git clone https://github.com/juliopessan/Youtube-Agent-Factory.git
+cd Youtube-Agent-Factory
 npm install
 npm run walkthrough
 npm start
@@ -69,7 +106,7 @@ Before activating autonomous production, open **Production readiness** in the da
 
 AI image generation can incur a larger provider charge, so its live probe is a separate opt-in checkbox. Without that checkbox, image configuration is reported as verified, skipped, or using the built-in gradient fallback without making a paid image request.
 
-AI video verification has its own **Include paid video probe** checkbox. When enabled, Lumen creates the provider's shortest supported test clip, records the external task and model, downloads and decodes the MP4, then removes the temporary asset. It never silently tries a second paid provider.
+AI video verification has its own **Include paid video probe** checkbox. When enabled, the factory creates the provider's shortest supported test clip, records the external task and model, downloads and decodes the MP4, then removes the temporary asset. It never silently tries a second paid provider.
 
 Results persist locally in SQLite with exact remediation steps. A recorded blocking failure stops autonomous generation and publishing until a later run passes; manual work remains available when readiness has never been checked or the last result is older than 24 hours.
 
@@ -77,7 +114,7 @@ Results persist locally in SQLite with exact remediation steps. A recorded block
 
 Every generation stage writes a local SQLite checkpoint. If a provider times out or the application restarts, the dashboard shows the saved-stage count and the first incomplete stage. Choose **Resume** to continue from there, or select an earlier stage when you intentionally want to regenerate that stage and everything after it. Saved files are validated before reuse; missing artifacts are regenerated automatically.
 
-Autonomous Operator runs preserve their research and editorial plan, so **Resume run** continues unfinished plan items instead of researching and generating completed videos again. Publishing remains fail-closed: if an upload may have reached YouTube but no video ID was returned, Lumen requires channel reconciliation before another upload attempt.
+Autonomous Operator runs preserve their research and editorial plan, so **Resume run** continues unfinished plan items instead of researching and generating completed videos again. Publishing remains fail-closed: if an upload may have reached YouTube but no video ID was returned, the factory requires channel reconciliation before another upload attempt.
 
 ### Repair one scene without starting over
 
@@ -85,7 +122,7 @@ Every production now keeps a durable scene manifest with its narration, visual p
 
 Paid video regeneration always shows the provider and generated seconds and requires a separate confirmation. Uploaded assets require an explicit rights confirmation. Narration edits invalidate that scene's audio and factual review; live narration must be regenerated and any new factual claim must be reviewed against verified evidence before approval.
 
-Narration is fail-closed. AgentTube records the TTS provider, model, external task when available, generation time, cost evidence, and failure reason for every scene. If narration is missing, simulated, stale, or failed, the production cannot be approved, scheduled, or published. Use **Regenerate narration only** to repair the audio without spending video-generation credits or replacing a visual.
+Narration is fail-closed. the factory records the TTS provider, model, external task when available, generation time, cost evidence, and failure reason for every scene. If narration is missing, simulated, stale, or failed, the production cannot be approved, scheduled, or published. Use **Regenerate narration only** to repair the audio without spending video-generation credits or replacing a visual.
 
 An intentionally silent production requires a separate operator confirmation and a stored reason of at least 10 characters. The override remains visible in Review Studio, can be reversed, and is included in the narration revision history. Silence is never inferred from a failed provider call.
 
@@ -93,7 +130,7 @@ When the timeline is ready, **Rebuild final video** creates a new MP4 and scene-
 
 ### Repurpose an approved video into Shorts
 
-Open **Shorts Repurposing Studio** inside Review Studio and choose **Create 3 Short drafts**. By default AgentTube cuts the **best moments**: every sentence-aligned window of 20-58 seconds is scored (hook or re-hook opening, concrete figures, questions, twists, endings and, once the video is published, real per-scene retention), the best non-overlapping windows win, and the AI can re-rank and title the finalists. Choose *Evenly spaced* for the previous cut. AgentTube selects self-contained windows from the durable scene timeline and preserves the exact source-scene IDs, start time, duration, rationale, title, description, tags, layout, and inherited review evidence for each candidate. Draft selection is local and does not call an AI provider.
+Open **Shorts Repurposing Studio** inside Review Studio and choose **Create 3 Short drafts**. By default the factory cuts the **best moments**: every sentence-aligned window of 20-58 seconds is scored (hook or re-hook opening, concrete figures, questions, twists, endings and, once the video is published, real per-scene retention), the best non-overlapping windows win, and the AI can re-rank and title the finalists. Choose *Evenly spaced* for the previous cut. the factory selects self-contained windows from the durable scene timeline and preserves the exact source-scene IDs, start time, duration, rationale, title, description, tags, layout, and inherited review evidence for each candidate. Draft selection is local and does not call an AI provider.
 
 Choose a blurred-canvas, center-crop, or stacked-focus layout, then render a real 9:16 MP4 with mobile-safe burned captions and a separate SRT file. The source video and narration are reused, so the default workflow does not spend new image, video, or TTS credits. Changing the layout invalidates the prior render and requires a fresh local render.
 
@@ -110,6 +147,14 @@ npm run factory -- --offline --isolated --topic "5 armadilhas mentais que sabota
 `npm run factory` runs topic, script, compliance, storyboard, narration, the **SOP editor**, the quality gate and Short drafts, then inspects the files that were really produced (video streams, narration level, Shorts size) and writes `reports/factory/<run>/report.md` with the finished video, Shorts and a "what was real" summary. `--offline` needs no YouTube credentials and never uploads; `--isolated` uses a throwaway database. Without an AI key the script comes from `--script-file` (or the template writer); with one, every stage uses it.
 
 The editor follows a channel SOP (SOP-EDV-001): a new scene every 6-10 s and never beyond 12 s with varied lengths, hard cuts at impact and 500 ms fades otherwise, one colour look, yellow Montserrat Bold text at 4-6 moments, narration peaking at -4.5 dB over a music bed at -19 dB with 2-4 sound effects, a 20 second end screen, and an H.264 1920x1080 30 fps 2-pass export (12 Mbps target, 16 Mbps max, AAC 320 kbps) delivered as `[Data]_[NumeroVideo]_[TemaCurto].mp4` in `data/videos/finalizado/`. The SOP's quality checklist runs as part of the quality gate; set `edit_sop_strict` to make it block approval. Without footage from an image or video provider the editor renders animated backdrops, so a real video exists even with no keys.
+
+### Make a wellness music video
+
+```bash
+npm run factory -- --offline --isolated --no-approval --channel wellness-music --length short
+```
+
+`--channel wellness-music` creates the "Quiet Hours" profile and an idea backlog (sleep, calm, focus, meditation, morning), composes an original track on the machine, edits it as slow crossfaded movements with a title card and a 20 second end screen, renders a thumbnail and drafts Shorts. `--length` takes `short` (4 minutes, for tests), `medium` (30) or `long` (60). Claims are kept safe by a ban list ("cure insomnia", "treat anxiety" and similar are never used). `--no-approval` is only accepted together with `--isolated`.
 
 ### Review research and provenance
 
@@ -131,7 +176,7 @@ To test a separate DarkzSEO 1.4+ checkout instead of the bundled auditor:
 DARKZSEO_PATH=../darkzseo/darkzseo.py npm start
 ```
 
-The optional external adapter uses a shell-free Python child process, sends content JSON over stdin, and reads JSON-only stdout. The public PyPI `darkzseo` 1.3.3 package has a different site-audit CLI and is not used by AgentTube.
+The optional external adapter uses a shell-free Python child process, sends content JSON over stdin, and reads JSON-only stdout. The public PyPI `darkzseo` 1.3.3 package has a different site-audit CLI and is not used by the factory.
 
 ### What you need
 
@@ -141,49 +186,49 @@ The optional external adapter uses a shell-free Python child process, sends cont
 - FFmpeg, installed automatically through `ffmpeg-static`
 - Python 3.9+ only when explicitly testing an external DarkzSEO checkout
 
-Gemini offers free access for supported text and TTS usage. Gemini AI image generation currently requires paid-tier access; without an image provider, Lumen can assemble gradient-based visuals instead.
+Gemini offers free access for supported text and TTS usage. Gemini AI image generation currently requires paid-tier access; without an image provider, the factory can assemble gradient-based visuals instead.
 
 ### Run the Autonomous Channel Operator
 
 Open **Autonomous operator** in the dashboard and describe the channel outcome—not a task list. Set the objective, audience, content pillars, publishing cadence, success metric, and boundaries, then choose **Activate & run now**.
 
-Lumen refreshes YouTube trend and configured-competitor signals, checks recent channel topics, creates an evidence-labeled editorial plan, and sends each planned video through strategy, script, thumbnail, SEO, production, and workflow management. Active strategies also guide scheduled generation at the requested weekly cadence. Operator runs, decisions, progress, and failures persist in SQLite and remain visible in the dashboard.
+the factory refreshes YouTube trend and configured-competitor signals, checks recent channel topics, creates an evidence-labeled editorial plan, and sends each planned video through strategy, script, thumbnail, SEO, production, and workflow management. Active strategies also guide scheduled generation at the requested weekly cadence. Operator runs, decisions, progress, and failures persist in SQLite and remain visible in the dashboard.
 
 By default, finished videos wait for factual review, media-rights confirmation, and approval. Once approved, the existing publishing agent schedules and uploads them. Turning on autonomy does not bypass those gates, and simulated videos still cannot publish.
 
 ### Close the performance loop
 
-After publication, Lumen captures comparable 24-hour and 7-day performance snapshots. It evaluates CTR, retention, engagement, watch time, format, length, hook style, and title style against the channel's own history—not a universal view-count target.
+After publication, the factory captures comparable 24-hour and 7-day performance snapshots. It evaluates CTR, retention, engagement, watch time, format, length, hook style, and title style against the channel's own history—not a universal view-count target.
 
 Open **Analytics → What the agent learned** to review the evidence and confidence behind each recommendation. Pending or rejected recommendations never influence generation. Once you approve one, the next Autonomous Channel Operator run includes it as an explicit planning constraint. Simulated analytics fallbacks are stored as unverified and are never eligible for baselines or recommendations.
 
-When an approved learning calls for better packaging, Lumen prepares a control plus title and thumbnail variants for new videos. Review Studio shows those options before approval; the selected combination is the only one handed to the publishing queue. Lumen does not silently swap live YouTube metadata.
+When an approved learning calls for better packaging, the factory prepares a control plus title and thumbnail variants for new videos. Review Studio shows those options before approval; the selected combination is the only one handed to the publishing queue. the factory does not silently swap live YouTube metadata.
 
 ### Prove a growth recommendation
 
 Open **Analytics → Controlled Growth Experiments** after a video with approved-learning packaging variants is published. Create a draft plan with a 24–168 hour window per arm and a minimum-impressions threshold, review the exact title and thumbnail combinations, then separately approve and start the live test.
 
-Lumen records a cumulative analytics sample before and after each arm and evaluates only the interval delta. Every arm must reach the configured impression and click floor. The leading CTR must clear a 95% evidence threshold without a material retention regression or traffic-source shift; otherwise the result is explicitly **inconclusive**. Simulated analytics never advance an experiment.
+the factory records a cumulative analytics sample before and after each arm and evaluates only the interval delta. Every arm must reach the configured impression and click floor. The leading CTR must clear a 95% evidence threshold without a material retention regression or traffic-source shift; otherwise the result is explicitly **inconclusive**. Simulated analytics never advance an experiment.
 
-Arm rotations are limited to the plan you approved. After the final arm, Lumen restores the control title and thumbnail before presenting the result. Applying the winner is a separate confirmation; only then does the validated packaging pattern become an approved learning for future Autonomous Operator runs. Experiment state and evidence are stored in SQLite so restarts do not erase progress.
+Arm rotations are limited to the plan you approved. After the final arm, the factory restores the control title and thumbnail before presenting the result. Applying the winner is a separate confirmation; only then does the validated packaging pattern become an approved learning for future Autonomous Operator runs. Experiment state and evidence are stored in SQLite so restarts do not erase progress.
 
 ### Align the channel with outcomes and ROI
 
 The Autonomous Operator strategy can define a measurable primary outcome—views, watch hours, net subscribers, engagement rate, or estimated revenue—plus a numeric target, evidence window, monthly production budget, and currency. The existing free-text outcome context remains available for goals that need human nuance.
 
-At each real analytics window, Lumen stores subscriber gains and losses, watch hours, monetization evidence when the channel exposes it, and known production costs from durable scene records. **Analytics → Outcome & ROI Studio** shows target progress, evidence coverage, net subscribers, estimated revenue, known cost, ROI, and comparisons by content pillar, format, and production provider.
+At each real analytics window, the factory stores subscriber gains and losses, watch hours, monetization evidence when the channel exposes it, and known production costs from durable scene records. **Analytics → Outcome & ROI Studio** shows target progress, evidence coverage, net subscribers, estimated revenue, known cost, ROI, and comparisons by content pillar, format, and production provider.
 
-Missing evidence is explicit. A channel without monetization access shows revenue as unavailable rather than zero, and ROI stays unavailable until both revenue and complete cost evidence exist. When at least two comparable videos exist in each group, the learning engine can propose reallocating future content toward the pillar or format that best advances the configured outcome. That proposal remains pending until you approve it; Lumen never changes the strategy or budget silently.
+Missing evidence is explicit. A channel without monetization access shows revenue as unavailable rather than zero, and ROI stays unavailable until both revenue and complete cost evidence exist. When at least two comparable videos exist in each group, the learning engine can propose reallocating future content toward the pillar or format that best advances the configured outcome. That proposal remains pending until you approve it; the factory never changes the strategy or budget silently.
 
 ### Find the exact scene that lost viewers
 
-At each real analytics window, AgentTube also requests YouTube's audience-retention curve and maps its 100 elapsed-time points onto the stored scene durations. Open **Analytics → Scene-aware retention** to see the curve divided by scene, compare absolute and relative retention, and inspect drop-off, rewatch, strong-hold, or steady signals for each beat.
+At each real analytics window, the factory also requests YouTube's audience-retention curve and maps its 100 elapsed-time points onto the stored scene durations. Open **Analytics → Scene-aware retention** to see the curve divided by scene, compare absolute and relative retention, and inspect drop-off, rewatch, strong-hold, or steady signals for each beat.
 
-Retention snapshots are stored separately for long-form videos and Shorts. Missing, sparse, or simulated curves never enter this evidence layer. A scene finding creates a pending learning recommendation; it cannot guide future scripts, pacing, or scene structure until the operator approves it, and AgentTube never rewrites a published video. Use **Refresh curve** for a read-only update from YouTube Analytics, or `GET /api/retention/:videoId` to inspect stored evidence.
+Retention snapshots are stored separately for long-form videos and Shorts. Missing, sparse, or simulated curves never enter this evidence layer. A scene finding creates a pending learning recommendation; it cannot guide future scripts, pacing, or scene structure until the operator approves it, and the factory never rewrites a published video. Use **Refresh curve** for a read-only update from YouTube Analytics, or `GET /api/retention/:videoId` to inspect stored evidence.
 
 ### Engage with your audience
 
-Open **Engagement** in the dashboard. AgentTube syncs comments for recently published videos every four hours (more often for fresh videos) and classifies them into themes, sentiment, and questions. Likely spam, scams, and toxic comments are quarantined into a separate needs-attention list — AgentTube never deletes or hides a comment; acting on flagged comments stays in YouTube Studio.
+Open **Engagement** in the dashboard. the factory syncs comments for recently published videos every four hours (more often for fresh videos) and classifies them into themes, sentiment, and questions. Likely spam, scams, and toxic comments are quarantined into a separate needs-attention list — the factory never deletes or hides a comment; acting on flagged comments stays in YouTube Studio.
 
 Choose **Draft replies** to generate suggested answers in your channel's voice. Nothing posts automatically: every reply waits in the queue where you can edit, discard, or approve it, and approval requires an explicit confirmation. Posting requires re-authorizing YouTube once to grant the comment permission (`youtube.force-ssl`); until then the studio works in read-and-draft mode. A daily posting cap (default 50, `ENGAGEMENT_DAILY_REPLY_CAP`) keeps approval sessions bounded.
 
@@ -191,7 +236,7 @@ When three or more commenters ask for the same thing, the analysis mines an **au
 
 ## From idea to published video
 
-| Stage | What Lumen does | What you control |
+| Stage | What the factory does | What you control |
 | --- | --- | --- |
 | Research | Finds topics and builds a content strategy | Niche, audience, blocked topics |
 | Script | Writes the hook, narrative, CTA, and metadata | Voice, format, length, brand direction |
@@ -200,27 +245,9 @@ When three or more commenters ask for the same thing, the analysis mines an **au
 | Publish | Schedules and uploads approved content | Privacy, timing, final decision |
 | Learn | Captures 24-hour and 7-day evidence, measures the configured outcome and economics, then proposes the next move | Choose the KPI and approve or reject each learning before it guides planning |
 
-Lumen distinguishes real MP4 output from simulated placeholders. Simulated output cannot enter the approval or publishing path.
+The factory distinguishes real MP4 output from simulated placeholders. Simulated output cannot enter the approval or publishing path.
 
 For release history, see [CHANGELOG.md](CHANGELOG.md).
-
-## Architecture
-
-```mermaid
-graph TD
-    O[Autonomous Channel Operator] --> A[Research and Editorial Plan]
-    A --> B[Content Strategy Agent]
-    B --> C[Script Writer Agent]
-    C --> D[Thumbnail Designer Agent]
-    C --> E[SEO Optimizer Agent]
-    D --> F[Production Management Agent]
-    E --> F
-    F --> Z[DarkzSEO Discoverability Preflight]
-    Z --> G[Review and Approval Gates]
-    G --> H[Publishing & Scheduling Agent]
-    H --> I[Analytics & Optimization Agent]
-    I -->|feedback loop| A
-```
 
 ## How It Works
 
@@ -280,7 +307,7 @@ Local slideshow rendering remains the default, so upgrading does not start paid 
 | Kuaishou | `kling-v3-omni` | Storyboards and character/voice consistency | 3–15 seconds |
 | Alibaba | Wan 2.7 task-specific models | Efficient generation, reference video, and continuation | 2–15 seconds |
 
-Long-form productions use hybrid assembly: Lumen generates bounded provider clips for the hook and important sections, fills the remaining timeline locally, mixes the existing narration, and keeps the generated caption file alongside the production. As soon as a provider returns its task ID, Lumen persists it before polling so interrupted jobs can resume that known task instead of submitting it again.
+Long-form productions use hybrid assembly: the factory generates bounded provider clips for the hook and important sections, fills the remaining timeline locally, mixes the existing narration, and keeps the generated caption file alongside the production. As soon as a provider returns its task ID, the factory persists it before polling so interrupted jobs can resume that known task instead of submitting it again.
 
 ## Configuration
 
@@ -291,7 +318,7 @@ Long-form productions use hybrid assembly: Lumen generates bounded provider clip
 1. Create a project in [Google Cloud Console](https://console.cloud.google.com/)
 2. Enable **YouTube Data API v3**
 3. Create an OAuth 2.0 client (**Desktop app**, not Web application)
-4. Save the JSON as `config/credentials.json`; AgentTube uses its configured loopback redirect URI exactly
+4. Save the JSON as `config/credentials.json`; the factory uses its configured loopback redirect URI exactly
 
 #### OpenAI
 
@@ -366,7 +393,7 @@ GENERATION_RETRY_BASE_MS=1000
 
 The dashboard calculates setup, first-real-MP4, approval, publication, and repeat-generation milestones locally from SQLite and files on disk. A video counts only when a non-simulated `.mp4` with an MP4 container signature still exists.
 
-Anonymous milestone reporting is disabled by default and has no built-in collector. It activates only when you explicitly set both telemetry variables. The allowlisted payload contains the milestone name and time, Lumen version, OS family, Node major version, and a random installation ID. It never includes credentials, channel data, prompts, topics, titles, filenames, or video contents.
+Anonymous milestone reporting is disabled by default and has no built-in collector. It activates only when you explicitly set both telemetry variables. The allowlisted payload contains the milestone name and time, the factory version, OS family, Node major version, and a random installation ID. It never includes credentials, channel data, prompts, topics, titles, filenames, or video contents.
 
 ## Automation Schedule
 
@@ -587,7 +614,7 @@ If this was useful, check out:
 
 [@darkzOGx](https://github.com/darkzOGx), a solo builder shipping AI automation and developer tools. Find me on [X](https://x.com/darkzOGx) and [laderalabs.io](https://laderalabs.io).
 
-If Lumen saves you time, a star helps it reach more developers.
+If the factory saves you time, a star helps it reach more developers.
 
 ## Contributing
 
@@ -600,7 +627,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for ground rules (short version: one focu
 
 ```bash
 git clone <your-fork>
-cd youtube-automation-agent
+cd Youtube-Agent-Factory
 npm install
 npm run lint   # must pass — CI runs this on every PR
 npm test
