@@ -616,6 +616,26 @@ class Database {
         completed_at TEXT NOT NULL,
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
       )`,
+      `CREATE TABLE IF NOT EXISTS channel_mining_results (
+        id TEXT PRIMARY KEY,
+        term TEXT NOT NULL,
+        channel_id TEXT NOT NULL,
+        channel_title TEXT,
+        subscribers INTEGER,
+        niche TEXT,
+        avg_views INTEGER,
+        outlier_title TEXT,
+        outlier_url TEXT,
+        outlier_views INTEGER,
+        outlier_ratio REAL,
+        model TEXT,
+        original_language TEXT,
+        other_languages TEXT,
+        opportunity TEXT,
+        notes TEXT,
+        payload TEXT NOT NULL,
+        mined_at TEXT DEFAULT CURRENT_TIMESTAMP
+      )`,
             // System Settings
       `CREATE TABLE IF NOT EXISTS settings (
         key TEXT PRIMARY KEY,
@@ -2742,6 +2762,25 @@ class Database {
         [keyword, views, views, videoId, Math.min(100, views / 1000)]
       );
     }
+  }
+
+  async saveChannelMiningResult(row) {
+    const id = this.generateId('mine');
+    await this.executeQuery(
+      `INSERT INTO channel_mining_results (
+        id, term, channel_id, channel_title, subscribers, niche, avg_views, outlier_title, outlier_url,
+        outlier_views, outlier_ratio, model, original_language, other_languages, opportunity, notes, payload
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [id, row.term, row.channelId, row.channelTitle, row.subscribers, row.niche, row.avgViews, row.outlierTitle,
+        row.outlierUrl, row.outlierViews, row.outlierRatio, row.model, row.originalLanguage, row.otherLanguages,
+        row.opportunity, row.notes, JSON.stringify(row)]
+    );
+    return id;
+  }
+
+  async listChannelMiningResults(limit = 100) {
+    const rows = await this.getAllRows('SELECT payload, mined_at FROM channel_mining_results ORDER BY mined_at DESC LIMIT ?', [limit]);
+    return rows.map(row => ({ ...JSON.parse(row.payload), minedAt: row.mined_at }));
   }
 
   async getKeywordHistory() {

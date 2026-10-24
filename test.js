@@ -48,6 +48,7 @@ class SystemTest {
       { name: 'Gemini Media Provider Selection', test: () => this.testGeminiMediaProvider() },
       { name: 'Slideshow Renderer', test: () => this.testSlideshowRenderer() },
       { name: 'Evergreen Template Topics', test: () => this.testEvergreenTopics() },
+      { name: 'Dark Channel Mining', test: () => this.testChannelMining() },
       { name: 'Walkthrough Module', test: () => this.testWalkthroughModule() },
       { name: 'Logger System', test: () => this.testLogger() },
       { name: 'Directory Structure', test: () => this.testDirectories() },
@@ -2749,6 +2750,48 @@ class SystemTest {
     this.logger.info('Evergreen template topics test completed successfully');
   }
 
+  async testChannelMining() {
+    const { ChannelMiningAgent, parseIsoDuration, rateMultilingual, toCSV } = require('./agents/channel-mining-agent');
+    if (parseIsoDuration('PT1H2M3S') !== 3723) throw new Error('ISO duration parsing is wrong');
+
+    const now = new Date('2026-10-24T12:00:00Z');
+    const day = 86400000;
+    const searchCalls = [];
+    const uploads = Array.from({ length: 10 }, (_, i) => ({
+      id: `v${i}`, views: i === 0 ? 1200000 : 60000, lang: 'pt'
+    }));
+    const youtube = {
+      search: { list: async params => {
+        searchCalls.push(params);
+        if (params.relevanceLanguage === 'pt') return { data: { items: [{ id: { videoId: 'v0' }, snippet: { channelId: 'c1', channelTitle: 'Vida Verde BR' } }] } };
+        if (params.relevanceLanguage === 'es') return { data: { items: [{ id: { videoId: 'es1' }, snippet: { channelId: 'c9' } }] } };
+        return { data: { items: [] } };
+      } },
+      videos: { list: async ({ id }) => ({ data: { items: id.split(',').map(videoId => {
+        const upload = uploads.find(u => u.id === videoId);
+        return { id: videoId, snippet: { channelId: upload ? 'c1' : 'c9', title: upload ? `Como plantar manga - fatos ${videoId}` : 'Cómo plantar', publishedAt: new Date(now - Number(videoId.replace(/\D/g, '')) * 7 * day).toISOString(), defaultAudioLanguage: upload ? 'pt' : 'es' }, statistics: { viewCount: String(upload ? upload.views : 300000) }, contentDetails: { duration: 'PT32M' } };
+      }) } }) },
+      channels: { list: async () => ({ data: { items: [{ id: 'c1', snippet: { title: 'Vida Verde BR', description: 'Documentário e fatos sobre natureza', publishedAt: new Date(now - 200 * day).toISOString() }, statistics: { subscriberCount: '45000', videoCount: '40' }, contentDetails: { relatedPlaylists: { uploads: 'UU1' } } }] } }) },
+      playlistItems: { list: async () => ({ data: { items: uploads.map(u => ({ contentDetails: { videoId: u.id } })) } }) }
+    };
+    const saved = [];
+    const agent = new ChannelMiningAgent({ saveChannelMiningResult: async row => saved.push(row) }, {}, { youtubeClient: youtube, aiTextService: {}, now: () => now });
+    const rows = await agent.mine(['plantando uma árvore'], { languages: ['en', 'es'] });
+
+    const first = searchCalls[0];
+    if (first.type !== 'video' || first.videoDuration !== 'long' || first.publishedAfter !== new Date(now - 7 * day).toISOString()) {
+      throw new Error('Search must use Vídeo | +20 min | Esta semana filters');
+    }
+    if (rows.length !== 1 || saved.length !== 1) throw new Error('Expected one mined dark channel');
+    const row = rows[0];
+    if (row.subscribersLabel !== '45K' || row.model !== 'M1' || !row.outlierTitle.includes('v0')) throw new Error(`Unexpected row: ${JSON.stringify(row)}`);
+    if (row.opportunityLevel !== 'ALTA' || !row.otherLanguages.includes('Inglês')) throw new Error(`Missing EN gap should be ALTA: ${row.otherLanguages}`);
+    if (rateMultilingual([{ language: 'en', strongChannels: 4 }, { language: 'es', strongChannels: 3 }]).level !== 'BAIXA') throw new Error('Saturated languages must rate BAIXA');
+    if (!toCSV(rows).includes('OPORTUNIDADE MULTILÍNGUE')) throw new Error('CSV header missing');
+
+    this.logger.info('Channel mining test completed successfully');
+  }
+
   async testWalkthroughModule() {
     const { SetupWalkthrough, AI_PROVIDER_GUIDE, VIDEO_PROVIDER_GUIDE } = require('./walkthrough');
     const { PROVIDERS, GEMINI_MODELS, GEMINI_DEFAULT_MODEL } = require('./utils/ai-text-service');
@@ -2881,6 +2924,7 @@ class SystemTest {
       './agents/production-management-agent',
       './agents/publishing-scheduling-agent',
       './agents/analytics-optimization-agent',
+      './agents/channel-mining-agent',
       './utils/discoverability-service',
       './utils/discoverability-adapters/darkzseo'
     ];

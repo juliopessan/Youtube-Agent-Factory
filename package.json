@@ -17,6 +17,7 @@
     "agent:production": "node agents/production-management-agent.js",
     "agent:publishing": "node agents/publishing-scheduling-agent.js",
     "agent:analytics": "node agents/analytics-optimization-agent.js",
+    "agent:mining": "node agents/channel-mining-agent.js",
     "credentials:setup": "node utils/credential-manager.js setup",
     "lint": "eslint ."
   },

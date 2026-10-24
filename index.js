@@ -13,6 +13,7 @@ const { SEOOptimizerAgent } = require('./agents/seo-optimizer-agent');
 const { ProductionManagementAgent } = require('./agents/production-management-agent');
 const { PublishingSchedulingAgent } = require('./agents/publishing-scheduling-agent');
 const { AnalyticsOptimizationAgent } = require('./agents/analytics-optimization-agent');
+const { ChannelMiningAgent } = require('./agents/channel-mining-agent');
 const { DailyAutomation } = require('./schedules/daily-automation');
 const { OperatorService } = require('./utils/operator-service');
 const { AutonomousChannelOperator } = require('./utils/autonomous-channel-operator');
@@ -162,7 +163,8 @@ class YouTubeAutomationAgent {
       seoOptimizer: new SEOOptimizerAgent(this.db, this.credentials),
       production: new ProductionManagementAgent(this.db, this.credentials),
       publishing: new PublishingSchedulingAgent(this.db, this.credentials),
-      analytics: new AnalyticsOptimizationAgent(this.db, this.credentials)
+      analytics: new AnalyticsOptimizationAgent(this.db, this.credentials),
+      channelMining: new ChannelMiningAgent(this.db, this.credentials)
     };
 
     // Initialize each agent
@@ -1189,6 +1191,29 @@ class YouTubeAutomationAgent {
         return res.json({ success: true, result });
       } catch (error) {
         return res.status(error.status || 400).json({ success: false, error: error.message, code: error.code });
+      }
+    });
+
+    this.app.get('/api/mining', async (req, res) => {
+      const results = await this.db.listChannelMiningResults(Math.min(Number(req.query.limit) || 100, 500));
+      return res.json({ success: true, result: results });
+    });
+
+    this.app.post('/api/mining/run', protect, async (req, res) => {
+      if (!this.agents.channelMining) return res.status(503).json({ error: 'Channel mining agent is not configured' });
+      const terms = (Array.isArray(req.body?.terms) ? req.body.terms : [])
+        .map(term => String(term || '').trim()).filter(Boolean);
+      if (!terms.length || terms.length > 10 || terms.some(term => term.length > 100)) {
+        return res.status(400).json({ error: 'Provide 1-10 search terms of 100 characters or less' });
+      }
+      try {
+        const rows = await this.agents.channelMining.mine(terms, req.body?.options || {});
+        const csv = await this.agents.channelMining.exportCSV(rows);
+        const ideas = req.body?.promote ? await this.agents.channelMining.promoteToIdeas(rows) : [];
+        return res.json({ success: true, result: { rows, csv: path.relative(__dirname, csv), ideas } });
+      } catch (error) {
+        this.logger.error('Channel mining failed:', error);
+        return res.status(502).json({ error: error.message });
       }
     });
 
