@@ -60,6 +60,9 @@ const AMBIENT_PALETTES = {
 const DEFAULT_LOOK = 'eq=contrast=1.08:saturation=0.9:gamma=0.98';
 // The palettes are written dark; this lifts them to a dark-but-engaging backdrop (mean luma ~50-60).
 const PALETTE_LIFT = 2.4;
+// Relaxation palettes are written light on purpose; sleep and calm videos play in a dark room, so they are
+// dimmed to a mean luma near 30-60 (black is 16) instead of glowing at 100+.
+const AMBIENT_DIM = 0.5;
 
 function lift(hex, factor = PALETTE_LIFT) {
   const value = String(hex).replace('0x', '');
@@ -487,7 +490,7 @@ class VideoEditorService {
 
   async renderAmbientBackdrop(entry, file, palette, seconds) {
     const colors = AMBIENT_PALETTES[palette] || AMBIENT_PALETTES.twilight;
-    const [c0, c1] = colors[entry.index % colors.length];
+    const [c0, c1] = colors[entry.index % colors.length].map(color => lift(color, AMBIENT_DIM));
     const type = GRADIENT_TYPES[entry.index % GRADIENT_TYPES.length];
     return this.run([
       '-y', '-f', 'lavfi', '-i', `gradients=size=${SOP.width / 4}x${SOP.height / 4}:rate=${SOP.fps}:duration=${seconds.toFixed(3)}:c0=${c0}:c1=${c1}:nb_colors=2:seed=${entry.index + 11}:speed=0.006:type=${type}`,
