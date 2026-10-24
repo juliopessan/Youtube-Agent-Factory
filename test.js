@@ -54,6 +54,9 @@ class SystemTest {
       { name: 'YouTube Video Director Storyboard', test: () => this.testVideoDirector() },
       { name: 'Best Moments Shorts Clipping', test: () => this.testBestMomentsClipping() },
       { name: 'Storyboard Text Overlays', test: () => this.testTextOverlays() },
+      { name: 'Local Neural Narration', test: () => this.testLocalNarration() },
+      { name: 'SOP Video Editor', test: () => this.testSopEditor() },
+      { name: 'Factory Pipeline Verification', test: () => this.testFactoryPipeline() },
       { name: 'Walkthrough Module', test: () => this.testWalkthroughModule() },
       { name: 'Logger System', test: () => this.testLogger() },
       { name: 'Directory Structure', test: () => this.testDirectories() },
@@ -2962,8 +2965,12 @@ class SystemTest {
 
     // Prompts: style, no on-screen text, bounded length; overlays only for concrete facts
     if (board.shots.some(shot => !shot.prompt.includes(VISUAL_STYLES[board.style].descriptor) || !shot.prompt.includes('No readable text') || shot.prompt.length > 1800)) throw new Error('Every prompt must carry the style and forbid on-screen text');
-    const overlay = board.shots.find(shot => shot.showTextOverlay);
-    if (!overlay || overlay.headline !== '1453' || board.shots[0].showTextOverlay) throw new Error('Overlays must come from concrete facts and never sit on the hook');
+    const overlays = board.shots.filter(shot => shot.showTextOverlay);
+    if (overlays.length < 4 || overlays.length > 6 || !board.shots[0].showTextOverlay || !board.shots[0].headline.startsWith('EM 1453')) throw new Error(`SOP wants the hook claim plus 4-6 text moments: ${overlays.map(shot => shot.headline)}`);
+    if (board.shots.some(shot => shot.narrativeRole === 'cta' && shot.showTextOverlay)) throw new Error('The CTA must not carry on-screen text');
+    // SOP-EDV-001 cadence: a new scene every 6-10 s, never beyond 12 s, and lengths that vary
+    const lengths = board.shots.map(shot => shot.durationSec);
+    if (Math.max(...lengths) > 12 || new Set(lengths.map(value => value.toFixed(1))).size < 4) throw new Error(`Scene lengths must stay under 12s and vary: ${lengths.join(' ')}`);
 
     // Style rotation avoids the latest videos' look
     if (director.chooseStyle('auto', 'Finanças', ['cinematic']) === 'cinematic') throw new Error('Style must rotate away from the previous video');
@@ -3116,6 +3123,9 @@ class SystemTest {
     if (!meat || Math.abs(meat.start - (10 * 2 + 1)) > 0.01 || meat.end - meat.start > 5) throw new Error(`Overlay timing was not rescaled to the real video: ${JSON.stringify(meat)}`);
     if (overlays.some(item => item.headline === '53 DIAS')) throw new Error('Shots shorter than four seconds must not carry an overlay');
     const ass = buildASS(overlays);
+    if (!/Style: Highlight,Montserrat,(6\d|[7-9]\d),&H0000D6FF/.test(ass) || !ass.includes(',-1,0,0,0,') || !ass.includes(',4,1,1,')) throw new Error('On-screen text must be Montserrat Bold, yellow #FFD600, 60pt or larger, with an outline');
+    const hookOverlay = buildOverlays({ shots: [{ label: 'Hook 1', narrativeRole: 'hook', showTextOverlay: true, headline: 'AFIRMAÇÃO' }] }, [{ label: 'Hook 1', duration: 6 }], 6);
+    if (hookOverlay.length !== 1 || hookOverlay[0].start > 0.5) throw new Error('The hook claim must be on screen inside the first half second');
     if (!ass.includes('Dialogue: 0,0:00:') || ass.includes('{x}') || !ass.includes('1453  N'.slice(0, 4)) || !ass.includes('PlayResX: 1920') || !buildASS(overlays, { vertical: true }).includes('PlayResY: 1920')) throw new Error('The ASS file is malformed or leaks override codes');
 
     // Failure keeps the original video untouched
@@ -3144,6 +3154,236 @@ class SystemTest {
       await fs.rm(directory, { recursive: true, force: true });
     }
     this.logger.info('Text overlays test completed successfully');
+  }
+
+  async testLocalNarration() {
+    const fs = require('fs').promises;
+    const os = require('os');
+    const { detectLanguage, normalizeLanguage } = require('./utils/language');
+    const { LocalTTSService } = require('./utils/local-tts-service');
+    const { AIVideoGenerator } = require('./utils/ai-video-generator');
+
+    if (detectLanguage('Você já perdeu dinheiro sem perceber, e a culpa não foi da sua renda, foi do seu cérebro.') !== 'pt-BR') throw new Error('Portuguese must be detected');
+    if (detectLanguage('Nobody tells you how this civilization disappeared, and the reason is not what you think.') !== 'en-US') throw new Error('English must be detected');
+    if (detectLanguage('Nadie te cuenta por qué esta civilización desapareció, y la razón no es la que piensas.') !== 'es') throw new Error('Spanish must be detected');
+    if (detectLanguage('curto', 'pt-BR') !== 'pt-BR' || normalizeLanguage('pt_br') !== 'pt-BR') throw new Error('Language fallbacks and normalization are wrong');
+
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'yaa-localtts-'));
+    const saved = { ...process.env };
+    try {
+      // Fake "python": a Node script that writes a half-second sine WAV and reports it like kokoro_tts.py does
+      const fixture = path.join(directory, 'fake-kokoro.js');
+      await fs.writeFile(fixture, [
+        "const fs = require('fs');",
+        "const args = process.argv; const out = args[args.indexOf('--out') + 1]; const voice = args[args.indexOf('--voice') + 1];",
+        "process.stdin.resume(); process.stdin.on('data', () => {}); process.stdin.on('end', () => {",
+        "  const rate = 24000; const n = rate / 2; const data = Buffer.alloc(n * 2);",
+        "  for (let i = 0; i < n; i++) data.writeInt16LE(Math.round(8000 * Math.sin(2 * Math.PI * 440 * i / rate)), i * 2);",
+        "  const header = Buffer.alloc(44); header.write('RIFF', 0); header.writeUInt32LE(36 + data.length, 4); header.write('WAVEfmt ', 8);",
+        "  header.writeUInt32LE(16, 16); header.writeUInt16LE(1, 20); header.writeUInt16LE(1, 22); header.writeUInt32LE(rate, 24);",
+        "  header.writeUInt32LE(rate * 2, 28); header.writeUInt16LE(2, 32); header.writeUInt16LE(16, 34); header.write('data', 36); header.writeUInt32LE(data.length, 40);",
+        "  fs.writeFileSync(out, Buffer.concat([header, data]));",
+        "  console.log(JSON.stringify({ seconds: 0.5, sampleRate: rate, sentences: 1, voice }));",
+        "});"
+      ].join('\n'));
+      const model = path.join(directory, 'kokoro-v1.0.onnx');
+      const voices = path.join(directory, 'voices-v1.0.bin');
+      const makeService = () => new LocalTTSService({ root: directory, python: process.execPath, script: fixture, logger: { info() {}, warn() {} } });
+
+      if (await makeService().isAvailable()) throw new Error('Local narration must be unavailable without the model files');
+      await fs.writeFile(model, 'm'); await fs.writeFile(voices, 'v');
+      const service = makeService();
+      if (!await service.isAvailable()) throw new Error('Local narration must be available once the model files exist');
+
+      const out = path.join(directory, 'narration.mp3');
+      const result = await service.synthesize('Você já perdeu dinheiro sem perceber, e a culpa não foi da sua renda, foi do seu cérebro.', out, { speed: 1 });
+      if (result.voice !== 'pf_dora' || result.language !== 'pt-BR' || !(await fs.stat(out)).size) throw new Error(`Unexpected narration result: ${JSON.stringify(result)}`);
+      const level = await runCommandBanner(out);
+      if (!/Audio: mp3/.test(level)) throw new Error('The narration must be encoded as MP3');
+      let unsupported = false;
+      try { await service.synthesize('x', path.join(directory, 'x.mp3'), { language: 'de' }); } catch (error) { unsupported = /does not support/.test(error.message); }
+      if (!unsupported) throw new Error('An unsupported language must be refused clearly');
+      process.env.LOCAL_TTS = 'off';
+      if (await makeService().isAvailable()) throw new Error('LOCAL_TTS=off must disable local narration');
+      delete process.env.LOCAL_TTS;
+
+      // The generator uses it when no paid provider is configured, and records free local evidence
+      for (const key of ['OPENAI_API_KEY', 'GEMINI_API_KEY', 'ELEVENLABS_API_KEY', 'ELEVENLABS_VOICE_ID']) delete process.env[key];
+      const generator = new AIVideoGenerator({}, { localTTS: makeService() });
+      const generated = await generator.generateTTSAudio('Você já perdeu dinheiro sem perceber, e a culpa não foi da sua renda.', path.join(directory, 'scene.mp3'), {});
+      if (generator.lastNarrationResult.provider !== 'kokoro' || generator.lastNarrationResult.cost.invoiceRequired !== false || !await generator.isUsableAudioFile(generated)) {
+        throw new Error(`Local narration was not recorded as a free provider: ${JSON.stringify(generator.lastNarrationResult)}`);
+      }
+    } finally {
+      process.env = saved;
+      await fs.rm(directory, { recursive: true, force: true });
+    }
+    this.logger.info('Local narration test completed successfully');
+
+    async function runCommandBanner(file) {
+      const { runFFmpeg } = require('./utils/ffmpeg');
+      return runFFmpeg(['-hide_banner', '-i', file]).then(r => String(r.stderr), error => String(error.stderr));
+    }
+  }
+
+  async testFactoryPipeline() {
+    const fs = require('fs').promises;
+    const os = require('os');
+    const { runFFmpeg } = require('./utils/ffmpeg');
+    const { FactoryPipeline, probe } = require('./utils/factory-pipeline');
+    const { YouTubeAutomationAgent } = require('./index');
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'yaa-factory-'));
+    try {
+      // The probe reads real streams and tells narration from silence
+      const loud = path.join(directory, 'loud.mp4');
+      const quiet = path.join(directory, 'quiet.mp4');
+      await runFFmpeg(['-y', '-f', 'lavfi', '-i', 'color=c=#203a5f:s=640x360:r=24:d=2', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=2', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', loud]);
+      await runFFmpeg(['-y', '-f', 'lavfi', '-i', 'color=c=#203a5f:s=640x360:r=24:d=2', '-f', 'lavfi', '-i', 'anullsrc=r=44100:cl=mono', '-t', '2', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', quiet]);
+      const heard = await probe(loud);
+      const silent = await probe(quiet);
+      if (heard.width !== 640 || !heard.hasAudio || !(heard.meanVolumeDb > -50)) throw new Error(`The probe misread a narrated video: ${JSON.stringify(heard)}`);
+      if (!silent.hasAudio || !(silent.meanVolumeDb <= -50)) throw new Error(`The probe must flag silent audio: ${JSON.stringify(silent)}`);
+      if ((await probe(path.join(directory, 'missing.mp4'))).exists) throw new Error('A missing file must not exist');
+
+      // A stub app drives the orchestrator through topic, generation, verification and the report
+      const makeApp = ({ jobStatus = 'completed', backlog = [] }) => ({
+        offline: true, agents: {},
+        compliance: { report: async () => ({ mandatoryDone: false, checks: [{ id: 'compliance_hook', passed: true, message: 'ok' }, { id: 'compliance_originality', passed: false, message: 'confirm' }] }) },
+        db: {
+          listContentIdeas: async () => backlog,
+          updateContentIdea: async () => null,
+          getProductionBundle: async () => ({
+            review_status: 'needs_review',
+            assets: { finalVideo: { path: loud, simulated: false, provider: { actualProvider: 'slideshow' }, overlays: { count: 2 } }, audio: { provider: 'kokoro', model: 'kokoro-v1.0' }, thumbnail: { path: loud } },
+            script: { metadata: { generationSource: 'script-file' }, storyboard: { shots: [{}], styleLabel: 'Noir', summary: { shots: 5, roleCounts: { rehook: 2 }, generatedClips: 3, totalSeconds: 2 } } },
+            scenes: [{}, {}], qualityChecks: [{ id: 'video', passed: true, blocking: true, message: 'ok' }], editorData: {}
+          }),
+          listShortClips: async () => [{ id: 's1', title: 'Corte', status: 'rendered', selectionMode: 'best_moments', momentScore: 7.5, outputPath: loud }]
+        },
+        startGenerationJob: async () => ({ id: 'job-1' }),
+        waitForGenerationJob: async () => ({ id: 'job-1', status: jobStatus, stage: 'production', productionId: 'prod-1', title: 'Teste', error: jobStatus === 'completed' ? null : 'provider exploded' })
+      });
+      const probeStub = facts => async () => ({ exists: true, bytes: 2e6, seconds: 2, width: 1920, height: 1080, hasVideo: true, hasAudio: true, meanVolumeDb: -22, ...facts });
+      const logger = { info() {}, warn() {} };
+
+      const good = await new FactoryPipeline(makeApp({}), { reportsRoot: directory, probe: probeStub({}), logger }).run({ topic: 'Tema' });
+      if (!good.passed || good.provenance.script !== 'script-file' || good.provenance.upload !== 'not performed (offline mode)') throw new Error(`A healthy run must pass and record what was real: ${JSON.stringify(good.checks.filter(c => c.status === 'failed'))}`);
+      for (const file of ['report.json', 'report.md', 'deliverables/video.mp4']) await fs.stat(path.join(good.reportDir, file));
+
+      const mute = await new FactoryPipeline(makeApp({}), { reportsRoot: directory, probe: probeStub({ meanVolumeDb: -91 }), logger }).run({ topic: 'Tema' });
+      if (mute.passed || mute.checks.find(c => c.id === 'narration_audible').status !== 'failed') throw new Error('A silent video must fail even when the job completed');
+      const failedJob = await new FactoryPipeline(makeApp({ jobStatus: 'failed' }), { reportsRoot: directory, probe: probeStub({}), logger }).run({ topic: 'Tema' });
+      if (failedJob.passed || !/provider exploded/.test(failedJob.error) || failedJob.stages.find(s => s.name === 'generation').status !== 'failed') throw new Error('A failed job must fail the run with its reason');
+      const noTopic = await new FactoryPipeline(makeApp({}), { reportsRoot: directory, probe: probeStub({}), logger }).run({});
+      if (noTopic.passed || !/No topic/.test(noTopic.error)) throw new Error('A run without a topic must say so');
+      const fromBacklog = await new FactoryPipeline(makeApp({ backlog: [{ id: 'idea-1', topic: 'Do backlog', status: 'backlog' }] }), { reportsRoot: directory, probe: probeStub({}), logger }).run({});
+      if (!fromBacklog.passed || fromBacklog.stages.find(s => s.name === 'topic').from !== 'backlog') throw new Error('The oldest backlog idea must be used when no topic is given');
+
+      // Closing the loop: Short drafts follow every real video, and can be switched off
+      const agent = new YouTubeAutomationAgent();
+      const calls = [];
+      agent.db = { getSetting: async () => null };
+      agent.shorts = { propose: async () => [{ id: 'a' }, { id: 'b' }], render: async (_id, clipId) => { calls.push(clipId); return { status: clipId === 'a' ? 'rendered' : 'failed' }; } };
+      const outcome = await agent.autoShorts('prod-1', { assets: { finalVideo: { path: 'v.mp4', simulated: false } } });
+      if (outcome.drafts !== 2 || outcome.rendered !== 1 || calls.length !== 2) throw new Error('Every draft must be rendered and counted');
+      if (await agent.autoShorts('prod-1', { assets: { finalVideo: { path: 'v.mp4', simulated: true } } })) throw new Error('A simulated video must never get Shorts');
+      agent.db = { getSetting: async () => 'false' };
+      if (await agent.autoShorts('prod-1', { assets: { finalVideo: { path: 'v.mp4', simulated: false } } })) throw new Error('shorts_auto_draft=false must switch the step off');
+    } finally {
+      await fs.rm(directory, { recursive: true, force: true });
+    }
+    this.logger.info('Factory pipeline test completed successfully');
+  }
+
+  async testSopEditor() {
+    const fs = require('fs').promises;
+    const os = require('os');
+    const { runFFmpeg } = require('./utils/ffmpeg');
+    const { VideoEditorService, deliveryName, SOP } = require('./utils/video-editor-service');
+    const { EditSopService, longestRun } = require('./utils/edit-sop-service');
+    const { splitIntoChunks } = require('./utils/video-director-service');
+
+    // Delivery name: [Data]_[NumeroVideo]_[TemaCurto].mp4
+    if (deliveryName({ date: new Date('2026-10-24T10:00:00Z'), number: 3, title: '5 armadilhas mentais que sabotam o seu dinheiro' }) !== '20261024_03_5-armadilhas-mentais-que.mp4') throw new Error('The delivery name must follow the SOP');
+
+    // Chunking keeps every scene under the cap and cycles the target lengths
+    const long = 'Esta é uma frase muito longa que continua sem parar, com várias vírgulas, e cláusulas que se estendem por bastante tempo, até passar de qualquer limite razoável para uma única cena de vídeo.';
+    const pieces = splitIntoChunks(long, [8, 6], 'moderado', 6);
+    if (pieces.length < 2 || pieces.some(piece => piece.split(' ').length / 150 * 60 > 6.5)) throw new Error(`A long sentence must be cut under the cap: ${pieces.length}`);
+
+    const editor = new VideoEditorService({ logger: { info() {}, warn() {} } });
+    const scene = (position, label, duration) => ({ id: `s${position}`, position, label, duration, assetPath: null, assetType: 'missing' });
+    const storyboard = { style: 'noir', shots: [
+      { label: 'Hook 1', narrativeRole: 'hook', showTextOverlay: true, headline: 'AFIRMAÇÃO' },
+      { label: 'Re-hook 2', narrativeRole: 'rehook' }, { label: 'Meat 3', narrativeRole: 'meat', showTextOverlay: true, headline: '1979' },
+      { label: 'Meat 4', narrativeRole: 'meat' }, { label: 'Meat 5', narrativeRole: 'meat' }
+    ] };
+    const scenes = [scene(0, 'Hook 1', 4), scene(1, 'Re-hook 2', 6), scene(2, 'Meat 3', 8), scene(3, 'Meat 4', 30), scene(4, 'Meat 5', 7)];
+    const plan = editor.planTimeline(scenes, storyboard, 110);
+    const byLabel = Object.fromEntries(plan.entries.map(entry => [entry.label + entry.part, entry]));
+    if (plan.entries[0].transitionIn !== 'cut' || byLabel['Re-hook 20'].transitionIn !== 'cut' || byLabel['Meat 30'].transitionIn !== 'fade') throw new Error('Impact scenes must start with a hard cut and soft scenes with a fade');
+    if (plan.entries.some(entry => entry.duration > SOP.scene.hardMax) || plan.stats.splitScenes < 2) throw new Error('A scene beyond 12 s must be split');
+    if (Math.abs(plan.totalSeconds - 110) > 0.5) throw new Error(`The timeline must be rescaled to the narration: ${plan.totalSeconds}`);
+    const fades = editor.fadeFilters(plan, true);
+    if (!fades.length || fades.some(filter => !/enable='between\(t,[\d.]+,[\d.]+\)'/.test(filter))) throw new Error('Every fade must be limited to its own window');
+
+    // The SOP gate: a clean cut passes, a sloppy one names what is wrong
+    const goodEdit = {
+      sop: SOP.code, timeline: { scenes: 35, hardCuts: 4, fades: 30, medianSeconds: 7.1, minSeconds: 4.4, maxSeconds: 10.8, durations: [6.4, 7.2, 8.1, 5.6, 9.2, 7.7, 10, 6] },
+      look: { look: 'channel-default' }, text: { moments: 5, font: 'Montserrat Bold', color: '#FFD600', sizePt: 64, firstAt: 0.3 },
+      audio: { narrationPeakDb: -4.5, musicMeanDb: -19, musicSource: 'procedural-drone', sfx: [{ type: 'stinger', at: 0.15 }, { type: 'whoosh', at: 60 }, { type: 'whoosh', at: 180 }] },
+      endScreen: { seconds: 20, videos: 2 }, export: { width: 1920, height: 1080, fps: 30, videoCodec: 'h264', audioCodec: 'aac', audioKbps: 320, overallKbps: 9000, target: '12M VBR 2-pass', maxrate: '16M' }
+    };
+    const sop = new EditSopService({ getSetting: async () => 'false' });
+    const production = { assets: { finalVideo: { edit: goodEdit, delivery: { name: '20261024_01_armadilhas-mentais.mp4' } } }, scenes: [{ assetPath: 'a.mp4' }, { assetPath: 'b.mp4' }] };
+    const failing = sop.evaluate(production).filter(check => !check.passed);
+    if (failing.length) throw new Error(`A clean SOP cut must pass every criterion: ${failing.map(check => check.id)}`);
+    const sloppy = sop.evaluate({ assets: { finalVideo: { edit: {
+      ...goodEdit, timeline: { ...goodEdit.timeline, maxSeconds: 15, medianSeconds: 13, durations: [8, 8, 8, 8] }, text: { ...goodEdit.text, moments: 9 },
+      audio: { narrationPeakDb: -1, musicMeanDb: -10, musicSource: 'x', sfx: [] }, endScreen: null, export: { ...goodEdit.export, width: 1280, overallKbps: 30000 }
+    }, delivery: { name: 'video final.mp4' } } }, scenes: [{ assetPath: 'a.mp4' }, { assetPath: 'a.mp4' }] }).filter(check => !check.passed).map(check => check.id).sort();
+    for (const id of ['sop_cadence', 'sop_variation', 'sop_text', 'sop_narration_level', 'sop_music_level', 'sop_sfx', 'sop_hook', 'sop_end_screen', 'sop_no_duplicates', 'sop_export', 'sop_naming']) {
+      if (!sloppy.includes(id)) throw new Error(`A sloppy cut must fail ${id}: ${sloppy}`);
+    }
+    if (sop.evaluate({ assets: { finalVideo: {} } })[0].id !== 'sop_edit') throw new Error('A video without SOP evidence must say so');
+    if (longestRun([8, 8.1, 8.05, 5, 5.1]) !== 3) throw new Error('longestRun must count near-equal neighbours');
+    if ((await new EditSopService({ getSetting: async () => 'true' }).review(production)).some(check => !check.blocking)) throw new Error('edit_sop_strict must make the checks blocking');
+
+    // A real, short edit: procedural scenes, fades without blackouts, mixed sound, SOP export
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'yaa-edit-'));
+    try {
+      const narration = path.join(directory, 'narration.wav');
+      await runFFmpeg(['-y', '-f', 'lavfi', '-i', 'sine=frequency=300:duration=12', '-af', 'volume=-14dB', narration]);
+      const shortScenes = [scene(0, 'Hook 1', 3), scene(1, 'Meat 2', 3), scene(2, 'Meat 3', 3), scene(3, 'Meat 4', 3)];
+      const shortBoard = { style: 'noir', shots: [
+        { label: 'Hook 1', narrativeRole: 'hook', showTextOverlay: true, headline: 'UMA AFIRMAÇÃO' }, { label: 'Meat 2', narrativeRole: 'meat' },
+        { label: 'Meat 3', narrativeRole: 'meat', showTextOverlay: true, headline: '1979' }, { label: 'Meat 4', narrativeRole: 'meat' }
+      ] };
+      const output = path.join(directory, 'edited.mp4');
+      const result = await editor.edit({ scenes: shortScenes, storyboard: shortBoard, narrationPath: narration, outputPath: output, dir: path.join(directory, 'work'), assetsDir: path.join(directory, 'assets') });
+      const evidence = result.evidence;
+      const out = evidence.export;
+      if (out.width !== 1920 || out.height !== 1080 || out.fps !== 30 || out.videoCodec !== 'h264' || out.audioCodec !== 'aac') throw new Error(`Export does not follow the SOP: ${JSON.stringify(out)}`);
+      if (Math.abs(out.seconds - 32) > 0.6) throw new Error(`12 s of scenes plus a 20 s end screen expected: ${out.seconds}`);
+      if (evidence.audio.sfx.length < 2 || evidence.audio.musicMeanDb < -20 || evidence.audio.musicMeanDb > -18 || evidence.audio.narrationPeakDb < -6 || evidence.audio.narrationPeakDb > -3) throw new Error(`Sound design is off: ${JSON.stringify(evidence.audio)}`);
+      if (evidence.text.moments !== 2 || !evidence.endScreen || evidence.visuals.procedural !== 4) throw new Error('Text, end screen and procedural scenes were not recorded');
+      if (result.generated.length !== 4) throw new Error('Procedural scenes must be handed back as real, replaceable assets');
+      const luma = async (second) => {
+        const frame = path.join(directory, `f${second}.png`);
+        await runFFmpeg(['-y', '-ss', String(second), '-i', output, '-frames:v', '1', '-vf', 'scale=1:1,format=gray', '-f', 'rawvideo', frame]);
+        return (await fs.readFile(frame))[0];
+      };
+      if (await luma(1.5) < 6 || await luma(7) < 6) throw new Error('A soft fade must not black out the rest of the video');
+      const finalLevels = await runFFmpeg(['-hide_banner', '-i', output, '-af', 'volumedetect', '-vn', '-f', 'null', '-']).then(r => String(r.stderr));
+      if (!/max_volume: -[\d.]+ dB/.test(finalLevels) || /max_volume: -0\.0 dB/.test(finalLevels)) throw new Error('The final mix must not clip');
+      const gate = await new EditSopService({ getSetting: async () => 'false' }).review({ assets: { finalVideo: { edit: evidence, delivery: { name: deliveryName({ title: 'teste' }) } } } });
+      for (const id of ['sop_export', 'sop_narration_level', 'sop_music_level', 'sop_sfx', 'sop_look', 'sop_end_screen', 'sop_naming']) {
+        if (!gate.find(check => check.id === id)?.passed) throw new Error(`The real edit must pass ${id}`);
+      }
+    } finally {
+      await fs.rm(directory, { recursive: true, force: true });
+    }
+    this.logger.info('SOP editor test completed successfully');
   }
 
   async testWalkthroughModule() {
@@ -3283,6 +3523,10 @@ class SystemTest {
       './utils/video-director-service',
       './utils/best-moments',
       './utils/text-overlay-service',
+      './utils/local-tts-service',
+      './utils/video-editor-service',
+      './utils/edit-sop-service',
+      './utils/factory-pipeline',
       './utils/discoverability-service',
       './utils/discoverability-adapters/darkzseo'
     ];

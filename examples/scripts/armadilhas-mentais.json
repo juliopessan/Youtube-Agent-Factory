@@ -1,0 +1,103 @@
+{
+  "title": "5 armadilhas mentais que sabotam o seu dinheiro",
+  "hook": {
+    "text": "Você já perdeu dinheiro sem perceber, e a culpa não foi da sua renda, foi do seu cérebro.",
+    "duration": "0:00-0:06"
+  },
+  "introduction": {
+    "greeting": "",
+    "topicIntro": "Nos próximos minutos você vai conhecer cinco armadilhas mentais que fazem gente inteligente tomar decisões ruins com dinheiro.",
+    "valueProposition": "Cada uma delas foi estudada por pesquisadores de economia comportamental, e todas têm um jeito simples de ser contornada.",
+    "credibility": "A quinta armadilha é a mais difícil de enxergar, porque ela parece uma qualidade.",
+    "duration": "0:06-0:30"
+  },
+  "mainContent": {
+    "sections": [
+      {
+        "title": "Armadilha um: aversão à perda",
+        "duration": 50,
+        "content": [
+          "Em 1979, Daniel Kahneman e Amos Tversky publicaram a teoria da perspectiva, e uma ideia dela mudou a economia.",
+          "Em muitos experimentos, perder um valor dói cerca de duas vezes mais do que ganhar o mesmo valor dá prazer.",
+          "Por isso, tanta gente segura um investimento que só cai, esperando voltar ao preço de compra, e vende cedo demais o que está subindo.",
+          "O custo disso é invisível, porque ninguém registra o ganho que deixou de ter.",
+          "Para sair dessa, pergunte: se eu não tivesse esse ativo hoje, eu compraria ele pelo preço de agora?"
+        ]
+      },
+      {
+        "title": "Armadilha dois: o viés do presente",
+        "duration": 50,
+        "content": [
+          "O segundo erro é preferir o prazer de hoje a um benefício bem maior no futuro.",
+          "Os pesquisadores chamam isso de viés do presente, e ele explica por que a reserva de emergência fica para a semana que vem.",
+          "O cérebro trata o você do futuro quase como uma pessoa desconhecida, e ninguém quer se sacrificar por um desconhecido.",
+          "A saída prática é automatizar. Programe a transferência para o dia em que o salário cai, antes de qualquer decisão.",
+          "Quando o dinheiro nunca passa pela sua mão, a tentação nem chega a existir."
+        ]
+      },
+      {
+        "title": "Armadilha três: ancoragem",
+        "duration": 50,
+        "content": [
+          "Em 1974, os mesmos Kahneman e Tversky mostraram que o primeiro número que você vê contamina todos os seguintes.",
+          "É a ancoragem. Um preço riscado de mil e quinhentos reais faz um preço de novecentos parecer uma pechincha, mesmo que o produto valha seiscentos.",
+          "O mesmo acontece com salário, com aluguel e com o preço de um carro usado.",
+          "Antes de olhar qualquer oferta, defina o seu próprio número. Pesquise o valor justo e escreva, antes de ver o preço do vendedor.",
+          "Quem chega com a própria âncora negocia de igual para igual."
+        ]
+      },
+      {
+        "title": "Armadilha quatro: contabilidade mental",
+        "duration": 50,
+        "content": [
+          "Richard Thaler ganhou o Nobel de Economia em 2017, em boa parte por estudar a contabilidade mental.",
+          "É quando você separa o dinheiro em gavetas imaginárias e trata cada uma com regras diferentes.",
+          "O décimo terceiro vira dinheiro para gastar, o reembolso do imposto vira presente, e o bônus vira festa.",
+          "Só que um real é um real, venha de onde vier. Gastar o que veio de graça é a mesma coisa que gastar o que você suou para ganhar.",
+          "Trate todo valor que entra como parte de um único orçamento, e decida o destino dele com a mesma calma."
+        ]
+      },
+      {
+        "title": "Armadilha cinco: comparação social",
+        "duration": 50,
+        "content": [
+          "A última armadilha é a que mais parece uma qualidade: querer acompanhar o padrão de quem está ao seu redor.",
+          "Só que você compara o seu extrato com a vitrine dos outros, e a vitrine nunca mostra as dívidas.",
+          "Muita gente financia um estilo de vida que nem escolheu, só para não ficar para trás de um grupo.",
+          "A pergunta que ajuda é simples: eu quero isso, ou eu quero que as pessoas vejam que eu tenho isso?",
+          "Quando a resposta é a segunda, o gasto raramente traz a felicidade que prometia."
+        ]
+      }
+    ],
+    "totalDuration": 250
+  },
+  "conclusion": {
+    "type": "conclusion",
+    "title": "Resumo",
+    "recap": [
+      "Aversão à perda faz você segurar o que devia vender.",
+      "O viés do presente adia a sua reserva para sempre.",
+      "A ancoragem deixa qualquer preço parecer razoável.",
+      "A contabilidade mental trata dinheiro igual como se fosse diferente.",
+      "E a comparação social faz você gastar para impressionar quem nem está olhando."
+    ],
+    "finalThought": "Você não precisa ganhar mais para decidir melhor, precisa só perceber o momento em que o cérebro tenta decidir por você.",
+    "duration": 35
+  },
+  "callToAction": {
+    "type": "call_to_action",
+    "subscribe": "Se esse vídeo mudou o seu jeito de olhar para o dinheiro, se inscreva no canal.",
+    "like": "Deixe o seu like para esse conteúdo chegar a mais gente.",
+    "comment": "Conta nos comentários: qual dessas armadilhas você reconheceu em você mesmo?",
+    "nextVideo": "No próximo vídeo, vamos ver como montar uma reserva de emergência sem sentir.",
+    "duration": 20
+  },
+  "tone": "calm and direct",
+  "pacing": "moderate",
+  "keywords": [
+    "psicologia do dinheiro",
+    "economia comportamental",
+    "finanças pessoais",
+    "vieses cognitivos"
+  ]
+}

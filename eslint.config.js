@@ -14,7 +14,12 @@ module.exports = [
       'data/captions/**',
       'data/scripts/**',
       'data/videos/**',
-      'data/thumbnails/**'
+      'data/thumbnails/**',
+      'data/local-tts/**',
+      'data/shorts/**',
+      'data/production/**',
+      // Third-party agent skills are vendored as-is and linted upstream.
+      '.claude/**'
     ]
   },
   js.configs.recommended,

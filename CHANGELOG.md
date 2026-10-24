@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Closed the end-to-end factory: `npm run factory` runs topic → script → compliance → storyboard → narration → SOP editor → quality gate → Short drafts and writes a verified report (`reports/factory/`) that inspects the real files (video streams, narration level, Shorts size) instead of trusting job status; every generated video now gets Short drafts automatically (`shorts_auto_draft`)
+- Added free local neural narration (Kokoro, `npm run tts:setup`) for Portuguese, English, Spanish, French and Italian, used automatically when no paid voice provider is configured, plus an offline mode (`--offline`) that produces locally and never uploads
+- Added the SOP editor (SOP-EDV-001, Fórmula YouTube M07 A04): scene cadence of 6-10 s (never beyond 12 s, varied), hard cuts at impact and 500 ms fades otherwise, a colour look (optional `.cube` LUT), Montserrat Bold yellow text at 4-6 moments, narration at -6..-3 dB over a generated music bed at -20..-18 dB with 2-4 sound effects, a 20 second end screen and an H.264 1080p30 two-pass export delivered as `[Data]_[NumeroVideo]_[TemaCurto].mp4`; scenes without footage get animated backdrops that are saved as replaceable scene assets, and a scene rebuild goes through the same editor
+- Added the SOP quality checklist to the quality gate (advisory, blocking with `edit_sop_strict`) and made the Director plan scenes and text moments to the SOP cadence
+- Fixed offline start-up (publishing and analytics no longer abort without YouTube credentials), the scene manifest now uses the real narration length, and `eslint` ignores vendored skills and local models
 - Installed the HyperFrames agent skills (`hyperframes`, `hyperframes-cli`, `hyperframes-registry`, `media-use`) from heygen-com/hyperframes (Apache-2.0) under `.claude/skills`, pinned in `skills-lock.json`
 - Added best-moment Shorts clipping: sentence-level windows of 20-58 s are scored on hook, concrete facts, questions, twists and endings, and the best non-overlapping moments become the drafts; published videos use real per-scene retention as the strongest signal and the AI can re-rank and title the finalists
 - Short drafts store their score, signals and exact narration, and their captions follow the clipped sentences; `mode: "even"` keeps the previous evenly spaced cut, and the dashboard has a selector for both

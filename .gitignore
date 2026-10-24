@@ -19,6 +19,21 @@ config/*.pem
 *.cert
 *.crt
 
+# Generated media, local models and runtime state
+data/local-tts/
+data/audio/
+data/videos/
+data/assets/
+data/production/
+data/scripts/
+data/shorts/
+data/thumbnails/
+data/thumbnail-templates/
+data/captions/
+
+# Factory run reports (videos, Shorts, thumbnails)
+reports/factory/
+
 # Database
 data/*.db
 data/*.sqlite

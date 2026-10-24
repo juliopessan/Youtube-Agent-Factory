@@ -4,6 +4,8 @@ const { Logger } = require('../utils/logger');
 const { AIVideoGenerator } = require('../utils/ai-video-generator');
 const { SceneRepairService } = require('../utils/scene-repair-service');
 const { TextOverlayService } = require('../utils/text-overlay-service');
+const { VideoEditorService, deliveryName } = require('../utils/video-editor-service');
+const { getMediaDuration } = require('../utils/ffmpeg');
 
 class ProductionManagementAgent {
   constructor(db, credentials) {
@@ -15,6 +17,7 @@ class ProductionManagementAgent {
     this.aiVideoGenerator = new AIVideoGenerator(credentials, { db });
     this.sceneRepair = new SceneRepairService(db, this.aiVideoGenerator, { logger: this.logger });
     this.textOverlays = new TextOverlayService({ logger: this.logger });
+    this.videoEditor = new VideoEditorService({ logger: this.logger });
   }
 
   async initialize() {
@@ -108,8 +111,9 @@ class ProductionManagementAgent {
       // Persist a scene-addressable production manifest for selective review and repair.
       await this.sceneRepair.initializeProduction(productionData, this.aiVideoGenerator.lastVideoResult || {});
 
-      // Burn the storyboard's headline/subheadline into the final video (never blocks production).
-      await this.applyTextOverlays(productionData);
+      // SOP-EDV-001 editor: cadence, look, on-screen text, sound design, end screen and export.
+      // Without it (or on failure) the assembled video keeps its plain text overlays.
+      if (!await this.editVideo(productionData)) await this.applyTextOverlays(productionData);
 
       // Mark as ready — or simulated, when no real video could be produced
       const simulated = Boolean(productionData.assets.finalVideo?.simulated);
@@ -422,6 +426,61 @@ class ProductionManagementAgent {
     return elements;
   }
 
+  async editVideo(productionData) {
+    try {
+      const storyboard = productionData.script?.storyboard;
+      if (!storyboard) return false;
+      const setting = async key => (this.db?.getSetting ? await this.db.getSetting(key) : null) || '';
+      if (await setting('edit_sop_enabled') === 'false') return false;
+
+      const audio = productionData.assets?.audio || {};
+      const narrationPath = audio.path && !audio.simulated && await this.aiVideoGenerator.isUsableAudioFile(audio.path) ? audio.path : null;
+      if (!narrationPath && audio.intentionalSilence !== true) return false;
+
+      const root = path.join(__dirname, '..', 'data');
+      const id = productionData.id;
+      const outputPath = path.join(root, 'videos', `${id}_final.mp4`);
+      const scenes = await this.db.listProductionScenes(id);
+      const result = await this.videoEditor.edit({
+        scenes, storyboard, narrationPath, narrationSeconds: audio.seconds || null, outputPath,
+        dir: path.join(root, 'production', `${id}_edit`),
+        assetsDir: path.join(root, 'assets', 'scenes', id),
+        style: storyboard.style,
+        endScreen: await setting('edit_end_screen') !== 'false',
+        lutPath: await setting('edit_lut_path') || null,
+        musicPath: await setting('edit_music_path') || null
+      });
+      for (const asset of result.generated) {
+        await this.db.updateProductionScene(id, asset.sceneId, {
+          assetPath: asset.path, assetType: 'video', assetOrigin: 'generated', provider: 'procedural',
+          model: 'ffmpeg-gradients', status: 'ready'
+        });
+      }
+
+      // [Data]_[NumeroVideo]_[TemaCurto].mp4 in the "finalizado" folder, as the SOP delivers it.
+      const count = await this.db.getRow('SELECT COUNT(*) AS count FROM productions');
+      const name = deliveryName({ number: Number(count?.count || 1), title: productionData.script?.title || id });
+      const deliveryDir = path.join(root, 'videos', 'finalizado');
+      await fs.mkdir(deliveryDir, { recursive: true });
+      await fs.copyFile(outputPath, path.join(deliveryDir, name));
+
+      const previous = productionData.assets.finalVideo || {};
+      productionData.assets.finalVideo = {
+        path: outputPath, fileSize: result.evidence.export.bytes, duration: result.evidence.export.seconds,
+        generatedWith: 'SOP editor', resolution: '1920x1080', format: 'mp4', simulated: false,
+        provider: { ...(previous.provider || {}), actualProvider: previous.provider?.actualProvider && !previous.simulated ? previous.provider.actualProvider : 'sop-editor', model: 'ffmpeg', editor: result.evidence.sop },
+        delivery: { name, path: path.join(deliveryDir, name) },
+        edit: result.evidence
+      };
+      productionData.timeline.videoEdited = new Date().toISOString();
+      this.logger.info(`SOP editor delivered ${name} (${result.evidence.export.seconds}s, ${result.evidence.text.moments} text moments, ${result.evidence.audio.sfx.length} effects)`);
+      return true;
+    } catch (error) {
+      this.logger.warn(`SOP editor failed, keeping the assembled video: ${error.message}`);
+      return false;
+    }
+  }
+
   async applyTextOverlays(productionData) {
     try {
       const video = productionData.assets?.finalVideo;
@@ -447,7 +506,9 @@ class ProductionManagementAgent {
       
       // Generate audio using AI TTS and retain the provider evidence returned by the generator.
       const generatedPath = await this.aiVideoGenerator.generateTTSAudio(ttsText, audioPath, {
-        instructions: productionData.script?.storyboard?.narration?.instructions
+        instructions: productionData.script?.storyboard?.narration?.instructions,
+        speed: productionData.script?.storyboard?.narration?.speed,
+        language: productionData.script?.storyboard?.language
       });
       const evidence = this.aiVideoGenerator.lastNarrationResult || {};
       const usable = await this.aiVideoGenerator.isUsableAudioFile(generatedPath);
@@ -469,7 +530,11 @@ class ProductionManagementAgent {
         intentionalSilence: false
       };
 
-      if (usable) productionData.timeline.audioGenerated = new Date().toISOString();
+      if (usable) {
+        productionData.timeline.audioGenerated = new Date().toISOString();
+        // The real narration length drives the scene timeline (the script estimate is only a guess).
+        productionData.assets.audio.seconds = Number((await getMediaDuration(generatedPath).catch(() => 0)).toFixed(2)) || null;
+      }
       return generatedPath;
     } catch (error) {
       this.logger.error('AI audio generation failed:', error);

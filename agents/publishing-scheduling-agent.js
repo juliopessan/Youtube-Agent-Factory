@@ -6,9 +6,10 @@ const { Logger } = require('../utils/logger');
 const { assertValidYouTubeMetadata } = require('../utils/youtube-metadata-validator');
 
 class PublishingSchedulingAgent {
-  constructor(db, credentials) {
+  constructor(db, credentials, options = {}) {
     this.db = db;
     this.credentials = credentials;
+    this.offline = Boolean(options.offline);
     this.logger = new Logger('PublishingScheduling');
     this.youtube = null;
     this.publishQueue = [];
@@ -16,7 +17,13 @@ class PublishingSchedulingAgent {
 
   async initialize() {
     this.logger.info('Initializing Publishing & Scheduling Agent...');
-    await this.setupYouTubeAPI();
+    try {
+      await this.setupYouTubeAPI();
+    } catch (error) {
+      // Offline factory runs schedule locally and never upload.
+      if (!this.offline) throw error;
+      this.logger.warn('Offline mode: videos are queued locally and nothing will be uploaded to YouTube');
+    }
     await this.loadPublishQueue();
     return true;
   }
@@ -225,6 +232,12 @@ class PublishingSchedulingAgent {
     };
     if (futureSchedule) videoMetadata.status.publishAt = scheduleEntry.publishTime;
     
+    if (!this.youtube) {
+      const error = new Error('YouTube is not connected, so nothing was uploaded. Run npm run credentials:setup and restart.');
+      error.code = 'YOUTUBE_NOT_CONNECTED';
+      throw error;
+    }
+
     // Resolve the file before marking the network upload as attempted.
     const videoStream = await this.getVideoStream(metadata.video.path);
     scheduleEntry.uploadAttempted = true;

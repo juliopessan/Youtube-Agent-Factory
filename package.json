@@ -19,6 +19,8 @@
     "agent:analytics": "node agents/analytics-optimization-agent.js",
     "agent:mining": "node agents/channel-mining-agent.js",
     "credentials:setup": "node utils/credential-manager.js setup",
+    "tts:setup": "node scripts/setup-local-tts.js",
+    "factory": "node scripts/factory-run.js",
     "lint": "eslint ."
   },
   "dependencies": {

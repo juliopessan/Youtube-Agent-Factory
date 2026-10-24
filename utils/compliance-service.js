@@ -6,7 +6,7 @@ const { Logger } = require('./logger');
 // everything else is refinement. So by default every check is advisory, and
 // only those three can block when `compliance_strict` is enabled.
 
-const NATURAL_VOICE_PROVIDERS = new Set(['elevenlabs', 'openai', 'gemini', 'azure']);
+const NATURAL_VOICE_PROVIDERS = new Set(['elevenlabs', 'openai', 'gemini', 'azure', 'kokoro']);
 const HOOK_WINDOW_WORDS = 17; // the first ~7 seconds at ~150 words per minute
 const RECENT_VIDEOS = 5;
 const THRESHOLDS = { script: 0.3, title: 0.7, sameOpening: 2, visualRepeat: 3 };

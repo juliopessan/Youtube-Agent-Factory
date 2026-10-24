@@ -1,6 +1,7 @@
 const { Logger } = require('./logger');
 const { scriptScenes } = require('./scene-repair-service');
 const { nicheInfo } = require('./niche-intelligence');
+const { detectLanguage, normalizeLanguage } = require('./language');
 
 // AI Video Director adapted for YouTube.
 // The original Flow tool turns a script into a storyboard of 4-10 second shots with a
@@ -31,11 +32,11 @@ const NICHE_STYLE_AFFINITY = {
 };
 
 const VOICE_TONES = {
-  impactante: { label: 'Impactante e dinâmico', instructions: 'Speak with high energy, punchy and dynamic, like a trailer announcer.' },
-  cinematografico: { label: 'Cinematográfico e épico', instructions: 'Deep, epic voice with dramatic pauses and cinematic diction.' },
-  storyteller: { label: 'Storyteller e narrativo', instructions: 'Warm, immersive storyteller voice with natural pauses, as in a documentary.' },
-  conversacional: { label: 'Conversacional e moderno', instructions: 'Natural and direct, like talking to a friend, relaxed and modern.' },
-  persuasivo: { label: 'Persuasivo e enérgico', instructions: 'Energetic and persuasive, with a confident and direct call to action.' }
+  impactante: { label: 'Impactante e dinâmico', speed: 1.08, instructions: 'Speak with high energy, punchy and dynamic, like a trailer announcer.' },
+  cinematografico: { label: 'Cinematográfico e épico', speed: 0.92, instructions: 'Deep, epic voice with dramatic pauses and cinematic diction.' },
+  storyteller: { label: 'Storyteller e narrativo', speed: 1, instructions: 'Warm, immersive storyteller voice with natural pauses, as in a documentary.' },
+  conversacional: { label: 'Conversacional e moderno', speed: 1.04, instructions: 'Natural and direct, like talking to a friend, relaxed and modern.' },
+  persuasivo: { label: 'Persuasivo e enérgico', speed: 1.06, instructions: 'Energetic and persuasive, with a confident and direct call to action.' }
 };
 
 const PACING_WPM = { rapido: 170, moderado: 150, dramatico: 125, enfatico: 140 };
@@ -63,11 +64,12 @@ const ROLE_ACTION = {
   cta: 'calm resolution as the motion settles'
 };
 
-// Long-form keeps one visual idea per ~20s of narration and re-hooks every two minutes;
-// Shorts are 9:16, change shot every ~6s and re-hook every ~15s.
+// Long-form changes the visual every 6-10 s and re-hooks every two minutes;
+// Shorts are 9:16, change shot every ~5s and re-hook every ~15s.
 const FORMATS = {
-  long: { aspectRatio: '16:9', shotSeconds: 20, rehookEvery: 120, maxSeconds: null },
-  short: { aspectRatio: '9:16', shotSeconds: 6, rehookEvery: 15, maxSeconds: 58 }
+  // SOP-EDV-001: change scene every 6-10 s, never beyond 12 s, and vary the length from scene to scene.
+  long: { aspectRatio: '16:9', shotSeconds: [8, 6, 10, 7, 9, 6, 10, 8], maxShotSeconds: 12, rehookEvery: 120, maxSeconds: null, overlays: { min: 4, max: 6 } },
+  short: { aspectRatio: '9:16', shotSeconds: [5, 4, 6], maxShotSeconds: 8, rehookEvery: 15, maxSeconds: 58, overlays: { min: 1, max: 3 } }
 };
 
 // A concrete figure or date worth highlighting on screen (never generic marketing text).
@@ -82,25 +84,54 @@ function estimateSeconds(text, pacing = 'moderado') {
   return Math.max(2, Number(((countWords(text) / wpm) * 60).toFixed(1)));
 }
 
-// Groups sentences into narration chunks of about `targetSeconds` each.
-function splitIntoChunks(text, targetSeconds, pacing = 'moderado') {
-  const sentences = String(text || '').split(/(?<=[.!?…])\s+/).map(s => s.trim()).filter(Boolean);
-  if (!sentences.length) return [];
+// A sentence longer than the cap is cut at its commas, then at its middle word.
+function splitLongSentence(sentence, pacing, maxSeconds) {
+  if (estimateSeconds(sentence, pacing) <= maxSeconds) return [sentence];
+  const clauses = sentence.split(/(?<=[,;:])\s+/).filter(Boolean);
+  if (clauses.length > 1) return clauses.flatMap(clause => splitLongSentence(clause, pacing, maxSeconds));
+  const words = sentence.split(/\s+/);
+  if (words.length < 4) return [sentence];
+  const middle = Math.ceil(words.length / 2);
+  return [words.slice(0, middle).join(' '), words.slice(middle).join(' ')].flatMap(part => splitLongSentence(part, pacing, maxSeconds));
+}
+
+/**
+ * Groups sentences into narration chunks. `targets` is one length in seconds or a list that is
+ * cycled so consecutive scenes never share a duration; no chunk exceeds `maxSeconds`.
+ */
+function splitIntoChunks(text, targets, pacing = 'moderado', maxSeconds = Infinity) {
+  const list = Array.isArray(targets) ? targets : [targets];
+  const pieces = String(text || '').split(/(?<=[.!?…])\s+/).map(item => item.trim()).filter(Boolean)
+    .flatMap(sentence => splitLongSentence(sentence, pacing, maxSeconds));
+  if (!pieces.length) return [];
   const chunks = [];
   let current = [];
-  for (const sentence of sentences) {
-    current.push(sentence);
-    if (estimateSeconds(current.join(' '), pacing) >= targetSeconds) {
-      chunks.push(current.join(' '));
-      current = [];
-    }
+  const flush = () => { chunks.push(current.join(' ')); current = []; };
+  for (const piece of pieces) {
+    if (current.length && estimateSeconds([...current, piece].join(' '), pacing) > maxSeconds) flush();
+    current.push(piece);
+    if (estimateSeconds(current.join(' '), pacing) >= list[chunks.length % list.length]) flush();
   }
   if (current.length) {
     const rest = current.join(' ');
-    if (chunks.length && estimateSeconds(rest, pacing) < targetSeconds * 0.4) chunks[chunks.length - 1] += ` ${rest}`;
+    const merged = chunks.length ? `${chunks[chunks.length - 1]} ${rest}` : null;
+    if (merged && estimateSeconds(rest, pacing) < 3 && estimateSeconds(merged, pacing) <= maxSeconds) chunks[chunks.length - 1] = merged;
     else chunks.push(rest);
   }
   return chunks;
+}
+
+// The hook's first clause, as the on-screen claim (at most eight words).
+function hookHeadline(text) {
+  const clause = String(text || '').split(/[,;:.!?…]/)[0].trim().split(/\s+/).slice(0, 8).join(' ');
+  return clause.toUpperCase();
+}
+
+// A section title without its "Armadilha um:" style prefix, kept short enough to read on a phone.
+function keywordHeadline(title) {
+  const text = String(title || '').split(':').pop().trim().toUpperCase();
+  if (text.length <= 32) return text;
+  return text.slice(0, 32).replace(/\s+\S*$/, '');
 }
 
 function classify(label) {
@@ -165,21 +196,24 @@ class VideoDirectorService {
     for (const beat of scriptScenes({ ...script, storyboard: undefined })) {
       const kind = classify(beat.label);
       const pacing = ROLE_PACING[kind === 'hook' ? 'hook' : kind === 'cta' ? 'cta' : 'meat'];
-      const pieces = splitIntoChunks(beat.scriptText, kind === 'hook' ? 8 : rules.shotSeconds, pacing);
+      // Chunk at the slowest role pace so no shot can overrun the cap once its role sets the speed.
+      const pieces = splitIntoChunks(beat.scriptText, kind === 'hook' ? 8 : rules.shotSeconds, kind === 'hook' ? pacing : 'enfatico', rules.maxShotSeconds);
       pieces.forEach((text, index) => chunks.push({ kind, title: beat.label, text, first: index === 0, last: index === pieces.length - 1 }));
     }
     if (!chunks.length) return null;
 
-    const shots = this.assignRoles(chunks, rules).map((shot, index) => this.buildShot(shot, index, style));
+    const planned = this.assignRoles(chunks, rules);
+    const shots = planned.map((shot, index) => this.buildShot(shot, index, style));
+    this.planOverlays(shots, planned, rules.overlays);
     const storyboard = {
       version: 1,
       format,
       style,
       styleLabel: VISUAL_STYLES[style].label,
       aspectRatio: options.aspectRatio || rules.aspectRatio,
-      language: options.language || 'pt-BR',
+      language: normalizeLanguage(options.language) || detectLanguage(chunks.map(chunk => chunk.text).join(' ')),
       niche: niche.niche,
-      narration: { voiceTone: tone, label: VOICE_TONES[tone].label, instructions: VOICE_TONES[tone].instructions },
+      narration: { voiceTone: tone, label: VOICE_TONES[tone].label, instructions: VOICE_TONES[tone].instructions, speed: VOICE_TONES[tone].speed },
       rehookEverySeconds: rules.rehookEvery,
       characters: [],
       environments: [],
@@ -221,7 +255,6 @@ class VideoDirectorService {
     const intro = shot.role === 'hook'
       ? 'Pattern-breaking opening image: '
       : shot.role === 'rehook' ? 'Pattern interrupt, sudden change of angle and scale: ' : '';
-    const fact = shot.role === 'meat' ? FACT.exec(shot.text) : null;
     return {
       id: `shot_${String(index + 1).padStart(3, '0')}`,
       sceneNumber: index + 1,
@@ -237,12 +270,45 @@ class VideoDirectorService {
       environmentLighting: style.lighting,
       cameraMovement: cameras[index % cameras.length],
       audioMusicCue: ROLE_AUDIO[shot.role],
-      headline: fact ? fact[0].toUpperCase().slice(0, 40) : '',
-      subheadline: fact ? shot.title.slice(0, 60) : '',
-      showTextOverlay: Boolean(fact),
+      headline: '',
+      subheadline: '',
+      showTextOverlay: false,
       generate: false,
       priority: ROLE_PRIORITY[shot.role]
     };
+  }
+
+  /**
+   * SOP-EDV-001: on-screen text at 4-6 moments (the hook's claim, a key figure, a keyword), never
+   * generic marketing copy. The hook always gets one; the others are spread over the video.
+   */
+  planOverlays(shots, planned, limits = { min: 4, max: 6 }) {
+    let cursor = 0;
+    const starts = shots.map(shot => { const start = cursor; cursor += shot.durationSec; return start; });
+    const candidates = [];
+    planned.forEach((source, index) => {
+      if (index === 0 && source.role === 'hook') {
+        candidates.push({ index, headline: hookHeadline(source.text), priority: 100 });
+        return;
+      }
+      if (source.role === 'cta' || source.role === 'hook') return;
+      const fact = FACT.exec(source.text);
+      if (fact) candidates.push({ index, headline: fact[0].toUpperCase().slice(0, 40), priority: 60 });
+      else if (source.kind === 'section' && source.first) candidates.push({ index, headline: keywordHeadline(source.title), priority: 40 });
+    });
+
+    const chosen = [];
+    const pick = (gap, max) => {
+      for (const candidate of candidates.filter(item => !chosen.includes(item)).sort((a, b) => b.priority - a.priority || a.index - b.index)) {
+        if (chosen.length >= max) break;
+        if (candidate.headline && chosen.every(other => Math.abs(starts[other.index] - starts[candidate.index]) >= gap)) chosen.push(candidate);
+      }
+    };
+    pick(20, limits.max);
+    if (chosen.length < limits.min) pick(8, limits.max);
+    for (const candidate of chosen) {
+      Object.assign(shots[candidate.index], { headline: candidate.headline, subheadline: '', showTextOverlay: true });
+    }
   }
 
   // One AI call: cast, setting and a specific visual idea per shot, kept consistent across the video.

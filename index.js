@@ -29,6 +29,7 @@ const { GrowthExperimentService } = require('./utils/growth-experiment-service')
 const { AITextService } = require('./utils/ai-text-service');
 const { DiscoverabilityService } = require('./utils/discoverability-service');
 const { ComplianceService } = require('./utils/compliance-service');
+const { EditSopService } = require('./utils/edit-sop-service');
 const { VideoDirectorService, VISUAL_STYLES, VOICE_TONES } = require('./utils/video-director-service');
 const { version } = require('./package.json');
 const chalk = require('chalk');
@@ -55,11 +56,20 @@ class YouTubeAutomationAgent {
     this.experiments = null;
     this.discoverability = null;
     this.compliance = null;
+    this.editSop = null;
     this.director = null;
     this.setupRequired = false;
   }
 
-  async initialize() {
+  /**
+   * @param {object} options
+   *   offline   - run the factory without YouTube credentials: video is produced locally and never uploaded
+   *   scheduler - start the daily automation scheduler (default true)
+   *   dbPath    - use another SQLite file (isolated runs)
+   */
+  async initialize(options = {}) {
+    const { offline = false, scheduler: withScheduler = true, dbPath = null } = options;
+    this.offline = offline;
     try {
       console.log(chalk.cyan.bold(`\n🎬 YouTube Automation Agent v${version}`));
       console.log(chalk.gray('─'.repeat(50)));
@@ -67,6 +77,7 @@ class YouTubeAutomationAgent {
       // Initialize database
       this.logger.info('Initializing database...');
       this.db = new Database();
+      if (dbPath) this.db.dbPath = dbPath;
       await this.db.initialize();
       await this.db.markInterruptedJobs();
       this.recovery = new GenerationRecoveryService(this.db, {
@@ -75,7 +86,8 @@ class YouTubeAutomationAgent {
       });
       this.compliance = new ComplianceService(this.db, { logger: this.logger });
       this.director = new VideoDirectorService(this.db, { logger: this.logger });
-      this.operator = new OperatorService(this.db, { compliance: this.compliance });
+      this.editSop = new EditSopService(this.db);
+      this.operator = new OperatorService(this.db, { compliance: this.compliance, editSop: this.editSop });
       this.provenance = new ProvenanceService(this.db);
       this.discoverability = new DiscoverabilityService(this.db, { logger: this.logger });
       this.autonomous = new AutonomousChannelOperator(this.db, {
@@ -97,7 +109,9 @@ class YouTubeAutomationAgent {
       const credentialsValid = await this.credentials.validateAll();
       this.readiness = new ProductionReadinessService(this.db, this.credentials);
       
-      if (!credentialsValid) {
+      if (!credentialsValid && offline) {
+        console.log(chalk.yellow('\n⚠️  Offline factory mode: missing providers fall back to local tools and nothing is uploaded to YouTube.'));
+      } else if (!credentialsValid) {
         console.log(chalk.yellow('\n⚠️  Some credentials are missing or invalid.'));
         console.log(chalk.yellow('Run: npm run credentials:setup'));
         this.setupRequired = true;
@@ -142,16 +156,18 @@ class YouTubeAutomationAgent {
       this.setupAPI();
       
       // Initialize scheduler
-      this.logger.info('Setting up automation scheduler...');
-      this.scheduler = new DailyAutomation(this.agents, this.db, {
-        generateContent: input => this.queueScheduledContent(input),
-        engagement: this.engagement,
-        experiments: this.experiments
-      });
-      await this.scheduler.initialize();
+      if (withScheduler) {
+        this.logger.info('Setting up automation scheduler...');
+        this.scheduler = new DailyAutomation(this.agents, this.db, {
+          generateContent: input => this.queueScheduledContent(input),
+          engagement: this.engagement,
+          experiments: this.experiments
+        });
+        await this.scheduler.initialize();
 
-      if (await this.db.getSetting('automation_paused') === 'true') {
-        await this.scheduler.pauseAutomation();
+        if (await this.db.getSetting('automation_paused') === 'true') {
+          await this.scheduler.pauseAutomation();
+        }
       }
       
       this.isInitialized = true;
@@ -171,8 +187,8 @@ class YouTubeAutomationAgent {
       thumbnailDesigner: new ThumbnailDesignerAgent(this.db, this.credentials),
       seoOptimizer: new SEOOptimizerAgent(this.db, this.credentials),
       production: new ProductionManagementAgent(this.db, this.credentials),
-      publishing: new PublishingSchedulingAgent(this.db, this.credentials),
-      analytics: new AnalyticsOptimizationAgent(this.db, this.credentials),
+      publishing: new PublishingSchedulingAgent(this.db, this.credentials, { offline: this.offline }),
+      analytics: new AnalyticsOptimizationAgent(this.db, this.credentials, { offline: this.offline }),
       channelMining: new ChannelMiningAgent(this.db, this.credentials)
     };
 
@@ -1297,7 +1313,7 @@ class YouTubeAutomationAgent {
     });
 
     this.app.put('/api/settings', protect, async (req, res) => {
-      const allowed = ['approval_required', 'notification_enabled', 'channel_timezone', 'max_daily_posts', 'content_buffer_days', 'compliance_strict', 'compliance_auto_fix_hook', 'director_enabled', 'director_ai_enrich', 'director_render_overlays', 'shorts_ai_rank'];
+      const allowed = ['approval_required', 'notification_enabled', 'channel_timezone', 'max_daily_posts', 'content_buffer_days', 'compliance_strict', 'compliance_auto_fix_hook', 'edit_sop_enabled', 'edit_sop_strict', 'edit_end_screen', 'director_enabled', 'director_ai_enrich', 'director_render_overlays', 'shorts_ai_rank'];
       for (const key of allowed) {
         if (req.body?.[key] !== undefined) await this.db.setSetting(key, String(req.body[key]));
       }
@@ -1607,7 +1623,7 @@ class YouTubeAutomationAgent {
     this.logger.info(`Content saved with ID: ${contentId}`);
 
     // Step 6: Quality and approval gate
-    return this.runGenerationStage(jobId, 'quality_review', 90, async () => {
+    const reviewResult = await this.runGenerationStage(jobId, 'quality_review', 90, async () => {
       const approvalRequired = await this.db.getSetting('approval_required') !== 'false';
       const packagingExperiment = approvalRequired
         ? await this.preparePackagingExperiment(thumbnail, productionData, seoData, script)
@@ -1652,6 +1668,32 @@ class YouTubeAutomationAgent {
         scheduledFor: scheduleEntry ? scheduleEntry.publishTime : null
       };
     });
+
+    // Step 7: Short drafts from the video's best moments (local render, nothing is published)
+    const shorts = await this.autoShorts(reviewResult.contentId, productionData);
+    return { ...reviewResult, shorts };
+  }
+
+  // Closes the loop: every real video gets Short drafts cut from its best moments and rendered locally.
+  async autoShorts(contentId, productionData) {
+    try {
+      if (!this.shorts || await this.db.getSetting('shorts_auto_draft') === 'false') return null;
+      if (!productionData.assets?.finalVideo?.path || productionData.assets.finalVideo.simulated) return null;
+      const drafts = await this.shorts.propose(contentId, { count: 3 });
+      let rendered = 0;
+      for (const draft of drafts) {
+        try {
+          if ((await this.shorts.render(contentId, draft.id)).status === 'rendered') rendered++;
+        } catch (error) {
+          this.logger.warn(`Short ${draft.id} could not be rendered: ${error.message}`);
+        }
+      }
+      this.logger.info(`Shorts: ${drafts.length} draft${drafts.length === 1 ? '' : 's'} proposed, ${rendered} rendered`);
+      return { drafts: drafts.length, rendered };
+    } catch (error) {
+      this.logger.warn(`Automatic Shorts skipped: ${error.message}`);
+      return null;
+    }
   }
 
   async runGenerationStage(jobId, stage, progress, producer) {

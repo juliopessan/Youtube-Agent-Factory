@@ -6,6 +6,7 @@ class OperatorService {
   constructor(db, options = {}) {
     this.db = db;
     this.compliance = options.compliance || null;
+    this.editSop = options.editSop || null;
     this.logger = new Logger('OperatorService');
   }
 
@@ -139,6 +140,14 @@ class OperatorService {
         checks.push(...await this.compliance.review(production));
       } catch (error) {
         this.logger.warn(`Compliance review skipped: ${error.message}`);
+      }
+    }
+
+    if (this.editSop && production.assets?.finalVideo?.edit) {
+      try {
+        checks.push(...await this.editSop.review(production));
+      } catch (error) {
+        this.logger.warn(`Edit SOP review skipped: ${error.message}`);
       }
     }
 

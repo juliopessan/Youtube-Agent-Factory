@@ -5,6 +5,7 @@ const sharp = require('sharp');
 const { getMediaDuration, runFFmpeg } = require('./ffmpeg');
 const { ProvenanceService } = require('./provenance-service');
 const { TextOverlayService } = require('./text-overlay-service');
+const { VideoEditorService } = require('./video-editor-service');
 
 const VIDEO_EXTENSIONS = new Set(['.mp4']);
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp']);
@@ -78,7 +79,7 @@ function durationSeconds(value, fallback = 60) {
 
 function buildInitialSceneManifest(production = {}, providerResult = {}) {
   const blueprints = scriptScenes(production.script || {});
-  const totalDuration = durationSeconds(production.estimatedDuration || production.assets?.finalVideo?.duration, Math.max(30, blueprints.length * 8));
+  const totalDuration = durationSeconds(production.assets?.audio?.seconds || production.estimatedDuration || production.assets?.finalVideo?.duration, Math.max(30, blueprints.length * 8));
   const wordCounts = blueprints.map(scene => Math.max(8, scene.scriptText.trim().split(/\s+/).filter(Boolean).length));
   const totalWords = wordCounts.reduce((sum, count) => sum + count, 0);
   const generated = providerResult.scenes || [];
@@ -136,6 +137,7 @@ class SceneRepairService {
     this.dataRoot = options.dataRoot || path.join(__dirname, '..', 'data');
     this.getMediaDuration = options.getMediaDuration || getMediaDuration;
     this.textOverlays = options.textOverlays || new TextOverlayService({ logger: this.logger });
+    this.videoEditor = options.videoEditor || new VideoEditorService({ logger: this.logger });
   }
 
   async ensureManifest(bundle) {
@@ -564,17 +566,34 @@ class SceneRepairService {
     const captionsPath = path.join(this.dataRoot, 'captions', `${productionId}_repair_${timestamp}.srt`);
     await fs.mkdir(path.dirname(finalPath), { recursive: true });
     await fs.mkdir(path.dirname(captionsPath), { recursive: true });
-    await this.videoGenerator.renderMediaTimeline(scenes.map(scene => ({
-      type: scene.assetType, path: scene.assetPath, duration: scene.duration
-    })), visualPath);
-
     const audioPath = await this.rebuildNarration(productionId, scenes, bundle.assets?.audio?.path, timestamp);
     const allIntentionalSilence = scenes.every(scene => scene.narrationStatus === 'intentional_silence');
-    await this.videoGenerator.addAudioToVideo(visualPath, audioPath, finalPath, { allowSilent: allIntentionalSilence });
-    await fs.unlink(visualPath).catch(() => {});
-    // A rebuilt video loses its burned-in text: render the storyboard overlays again on the new timeline.
-    if (bundle.script?.storyboard && await this.db.getSetting?.('director_render_overlays') !== 'false') {
-      await this.textOverlays.apply(finalPath, bundle.script.storyboard, scenes, { vertical: bundle.script.storyboard.aspectRatio === '9:16' });
+    const storyboard = bundle.script?.storyboard;
+
+    // With a storyboard the same SOP editor that built the first cut rebuilds it: cadence, text,
+    // sound design and export are kept instead of a bare concatenation.
+    let editEvidence = null;
+    if (storyboard && !allIntentionalSilence && await this.db.getSetting?.('edit_sop_enabled') !== 'false') {
+      try {
+        const edited = await this.videoEditor.edit({
+          scenes, storyboard, narrationPath: audioPath, outputPath: finalPath,
+          dir: path.join(this.dataRoot, 'production', `${productionId}_edit_${timestamp}`), style: storyboard.style
+        });
+        editEvidence = edited.evidence;
+      } catch (error) {
+        this.logger.warn(`SOP editor could not rebuild the video, using a plain rebuild: ${error.message}`);
+      }
+    }
+    if (!editEvidence) {
+      await this.videoGenerator.renderMediaTimeline(scenes.map(scene => ({
+        type: scene.assetType, path: scene.assetPath, duration: scene.duration
+      })), visualPath);
+      await this.videoGenerator.addAudioToVideo(visualPath, audioPath, finalPath, { allowSilent: allIntentionalSilence });
+      await fs.unlink(visualPath).catch(() => {});
+      // A plain rebuild loses its burned-in text: render the storyboard overlays again on the new timeline.
+      if (storyboard && await this.db.getSetting?.('director_render_overlays') !== 'false') {
+        await this.textOverlays.apply(finalPath, storyboard, scenes, { vertical: storyboard.aspectRatio === '9:16' });
+      }
     }
     await fs.writeFile(captionsPath, this.buildSRT(scenes));
     const stats = await fs.stat(finalPath);
@@ -599,7 +618,8 @@ class SceneRepairService {
       finalVideo: {
         ...(bundle.assets?.finalVideo || {}), path: finalPath, previousPath, fileSize: stats.size,
         duration: scenes.reduce((sum, scene) => sum + scene.duration, 0), simulated: false,
-        provider: { actualProvider: 'scene-repair', model: 'mixed-assets', scenes: scenes.length }
+        provider: { actualProvider: 'scene-repair', model: 'mixed-assets', scenes: scenes.length },
+        edit: editEvidence
       },
       sceneManifest: { count: scenes.length, version: 1, updatedAt: new Date().toISOString() }
     };

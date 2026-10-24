@@ -7,6 +7,7 @@ const sharp = require('sharp');
 const { Logger } = require('./logger');
 const { runFFmpeg, checkFFmpeg, ffmpegInstallHint } = require('./ffmpeg');
 const { MediaGenerationService } = require('./media-generation-service');
+const { LocalTTSService } = require('./local-tts-service');
 
 class AIVideoGenerator {
   constructor(credentials, options = {}) {
@@ -15,6 +16,7 @@ class AIVideoGenerator {
     this.db = options.db || null;
     this.lastVideoResult = null;
     this.lastNarrationResult = null;
+    this.localTTS = options.localTTS || new LocalTTSService({ logger: this.logger });
     
     // Initialize AI services with graceful fallback
     const openaiKey = resolvedCredentials.openai?.apiKey || process.env.OPENAI_API_KEY;
@@ -79,6 +81,11 @@ class AIVideoGenerator {
         provider = 'gemini';
         model = process.env.GEMINI_TTS_MODEL || 'gemini-3.1-flash-tts-preview';
         generatedPath = await this.generateGeminiTTS(text, outputPath);
+      } else if (await this.localTTS.isAvailable() && this.localTTS.supports(this.localTTS.resolveLanguage(text, options.language))) {
+        // Free neural narration on this machine: no key, no network.
+        provider = 'kokoro';
+        model = 'kokoro-v1.0';
+        generatedPath = (await this.localTTS.synthesize(text, outputPath, { language: options.language, speed: options.speed })).path;
       } else {
         generatedPath = await this.simulateTTSGeneration(text, outputPath);
       }
@@ -92,14 +99,14 @@ class AIVideoGenerator {
         externalTaskId: null,
         generatedAt: new Date().toISOString(),
         simulated: !usable,
-        cost: { provider, amount: null, currency: null, invoiceRequired: provider !== 'simulation' }
+        cost: { provider, amount: null, currency: null, invoiceRequired: !['simulation', 'kokoro'].includes(provider) }
       };
       return generatedPath;
     } catch (error) {
       this.lastNarrationResult = {
         status: 'failed', path: null, provider, model, externalTaskId: null,
         generatedAt: new Date().toISOString(), simulated: false, error: error.message,
-        cost: { provider, amount: null, currency: null, invoiceRequired: provider !== 'simulation' }
+        cost: { provider, amount: null, currency: null, invoiceRequired: !['simulation', 'kokoro'].includes(provider) }
       };
       this.logger.error('TTS generation failed:', error);
       throw error;

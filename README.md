@@ -93,11 +93,23 @@ When the timeline is ready, **Rebuild final video** creates a new MP4 and scene-
 
 ### Repurpose an approved video into Shorts
 
-Open **Shorts Repurposing Studio** inside Review Studio and choose **Create 3 Short drafts**. AgentTube selects self-contained windows from the durable scene timeline and preserves the exact source-scene IDs, start time, duration, rationale, title, description, tags, layout, and inherited review evidence for each candidate. Draft selection is local and does not call an AI provider.
+Open **Shorts Repurposing Studio** inside Review Studio and choose **Create 3 Short drafts**. By default AgentTube cuts the **best moments**: every sentence-aligned window of 20-58 seconds is scored (hook or re-hook opening, concrete figures, questions, twists, endings and, once the video is published, real per-scene retention), the best non-overlapping windows win, and the AI can re-rank and title the finalists. Choose *Evenly spaced* for the previous cut. AgentTube selects self-contained windows from the durable scene timeline and preserves the exact source-scene IDs, start time, duration, rationale, title, description, tags, layout, and inherited review evidence for each candidate. Draft selection is local and does not call an AI provider.
 
 Choose a blurred-canvas, center-crop, or stacked-focus layout, then render a real 9:16 MP4 with mobile-safe burned captions and a separate SRT file. The source video and narration are reused, so the default workflow does not spend new image, video, or TTS credits. Changing the layout invalidates the prior render and requires a fresh local render.
 
 Every Short has its own approval and schedule. Scheduling remains blocked until the source production is approved, provenance is resolved, uploaded media rights are confirmed, every source scene is current, and the operator explicitly confirms the Short's privacy and publish time. Published Shorts retain their parent-production identity while their analytics use a separate Shorts baseline.
+
+### Run the whole factory once
+
+```bash
+npm run tts:setup        # once: free local narration (Kokoro, Portuguese, English, Spanish, French, Italian)
+npm run factory -- --offline --isolated --topic "5 armadilhas mentais que sabotam o seu dinheiro" \
+  --script-file examples/scripts/armadilhas-mentais.json
+```
+
+`npm run factory` runs topic, script, compliance, storyboard, narration, the **SOP editor**, the quality gate and Short drafts, then inspects the files that were really produced (video streams, narration level, Shorts size) and writes `reports/factory/<run>/report.md` with the finished video, Shorts and a "what was real" summary. `--offline` needs no YouTube credentials and never uploads; `--isolated` uses a throwaway database. Without an AI key the script comes from `--script-file` (or the template writer); with one, every stage uses it.
+
+The editor follows a channel SOP (SOP-EDV-001): a new scene every 6-10 s and never beyond 12 s with varied lengths, hard cuts at impact and 500 ms fades otherwise, one colour look, yellow Montserrat Bold text at 4-6 moments, narration peaking at -4.5 dB over a music bed at -19 dB with 2-4 sound effects, a 20 second end screen, and an H.264 1920x1080 30 fps 2-pass export (12 Mbps target, 16 Mbps max, AAC 320 kbps) delivered as `[Data]_[NumeroVideo]_[TemaCurto].mp4` in `data/videos/finalizado/`. The SOP's quality checklist runs as part of the quality gate; set `edit_sop_strict` to make it block approval. Without footage from an image or video provider the editor renders animated backdrops, so a real video exists even with no keys.
 
 ### Review research and provenance
 

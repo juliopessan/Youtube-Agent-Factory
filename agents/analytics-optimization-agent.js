@@ -3,7 +3,8 @@ const { Logger } = require('../utils/logger');
 const { ChannelLearningEngine } = require('../utils/channel-learning-engine');
 
 class AnalyticsOptimizationAgent {
-  constructor(db, credentials) {
+  constructor(db, credentials, options = {}) {
+    this.offline = Boolean(options.offline);
     this.db = db;
     this.credentials = credentials;
     this.logger = new Logger('AnalyticsOptimization');
@@ -15,7 +16,13 @@ class AnalyticsOptimizationAgent {
 
   async initialize() {
     this.logger.info('Initializing Analytics & Optimization Agent...');
-    await this.setupAnalyticsAPI();
+    try {
+      await this.setupAnalyticsAPI();
+    } catch (error) {
+      // Offline factory runs have no channel to measure yet.
+      if (!this.offline) throw error;
+      this.logger.warn('Offline mode: analytics collection is disabled');
+    }
     await this.loadHistoricalData();
     return true;
   }
