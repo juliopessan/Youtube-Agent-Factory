@@ -30,6 +30,7 @@ const { AITextService } = require('./utils/ai-text-service');
 const { DiscoverabilityService } = require('./utils/discoverability-service');
 const { ComplianceService } = require('./utils/compliance-service');
 const { EditSopService } = require('./utils/edit-sop-service');
+const { WellnessChannelService } = require('./utils/wellness-channel');
 const { VideoDirectorService, VISUAL_STYLES, VOICE_TONES } = require('./utils/video-director-service');
 const { version } = require('./package.json');
 const chalk = require('chalk');
@@ -57,6 +58,7 @@ class YouTubeAutomationAgent {
     this.discoverability = null;
     this.compliance = null;
     this.editSop = null;
+    this.wellness = null;
     this.director = null;
     this.setupRequired = false;
   }
@@ -87,6 +89,7 @@ class YouTubeAutomationAgent {
       this.compliance = new ComplianceService(this.db, { logger: this.logger });
       this.director = new VideoDirectorService(this.db, { logger: this.logger });
       this.editSop = new EditSopService(this.db);
+      this.wellness = new WellnessChannelService(this.db);
       this.operator = new OperatorService(this.db, { compliance: this.compliance, editSop: this.editSop });
       this.provenance = new ProvenanceService(this.db);
       this.discoverability = new DiscoverabilityService(this.db, { logger: this.logger });
@@ -295,7 +298,9 @@ class YouTubeAutomationAgent {
         'informative',
         'engaging',
         'professional',
-        'ethereal'
+        'ethereal',
+        'music',
+        'ambient'
       ]);
       const style = body.style.trim();
 
@@ -1549,9 +1554,14 @@ class YouTubeAutomationAgent {
     const profile = await this.db.getChannelProfile() || {};
     const lengthLabels = { short: '2-4 minutes', medium: '8-12 minutes', long: '15-20 minutes' };
 
+    // A channel whose default style is ambient (or a job asking for music) makes tracks, not explainers.
+    const isMusic = ['music', 'ambient'].includes(String(style || profile.default_style || '').toLowerCase());
+
     // Step 1: Strategy
     const strategy = await this.runGenerationStage(jobId, 'strategy', 10, async () => {
-      const generated = await this.agents.strategy.generateContentStrategy(topic);
+      const generated = isMusic
+        ? await this.wellness.strategyFor(topic, strategyContext, length)
+        : await this.agents.strategy.generateContentStrategy(topic);
       const contentStyles = new Set(['tutorial', 'explainer', 'list', 'review', 'story']);
       const requestedStyle = style || profile.default_style || null;
       if (requestedStyle && contentStyles.has(requestedStyle.toLowerCase())) {
@@ -1581,7 +1591,9 @@ class YouTubeAutomationAgent {
       jobId,
       'script',
       25,
-      async () => this.applyDirector(await this.applyScriptCompliance(await this.agents.scriptWriter.generateScript(strategy)))
+      async () => isMusic
+        ? this.wellness.planTrack(strategy)
+        : this.applyDirector(await this.applyScriptCompliance(await this.agents.scriptWriter.generateScript(strategy)))
     );
     this.logger.info(`Script generated: ${script.title}`);
 
@@ -1590,7 +1602,10 @@ class YouTubeAutomationAgent {
       jobId,
       'thumbnail',
       40,
-      () => this.agents.thumbnailDesigner.generateThumbnail(script)
+      () => isMusic
+        // The editor renders the real thumbnail from a scene frame; the designer only adds its concept here.
+        ? this.agents.thumbnailDesigner.generateThumbnail(script).catch(() => ({ path: null, concept: { style: 'ambient' } }))
+        : this.agents.thumbnailDesigner.generateThumbnail(script)
     );
     this.logger.info('Thumbnail generated');
 
@@ -1599,7 +1614,7 @@ class YouTubeAutomationAgent {
       jobId,
       'seo',
       52,
-      () => this.agents.seoOptimizer.optimize(script, strategy)
+      () => isMusic ? this.wellness.seo(script, strategy) : this.agents.seoOptimizer.optimize(script, strategy)
     );
     this.logger.info('SEO optimization complete');
 
@@ -1679,7 +1694,8 @@ class YouTubeAutomationAgent {
     try {
       if (!this.shorts || await this.db.getSetting('shorts_auto_draft') === 'false') return null;
       if (!productionData.assets?.finalVideo?.path || productionData.assets.finalVideo.simulated) return null;
-      const drafts = await this.shorts.propose(contentId, { count: 3 });
+      // A track has no sentences to rank: its Shorts are evenly spaced movements.
+      const drafts = await this.shorts.propose(contentId, { count: 3, ...(productionData.script?.kind === 'music' ? { mode: 'even' } : {}) });
       let rendered = 0;
       for (const draft of drafts) {
         try {

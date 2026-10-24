@@ -59,7 +59,7 @@ class FactoryPipeline {
   }
 
   /**
-   * @param {object} input { topic, style, length, mineTerms: string[], shorts: boolean, source: { script: string } }
+   * @param {object} input { topic, style, length, channel: 'wellness-music', channelName, mineTerms: string[], shorts: boolean }
    * @returns the run report (also written to reports/factory/<id>/)
    */
   async run(input = {}) {
@@ -86,6 +86,11 @@ class FactoryPipeline {
     };
 
     try {
+      // Starting a channel: save its profile and fill the idea backlog, then everything below is automatic.
+      if (input.channel === 'wellness-music') {
+        await stage('channel', async () => ({ ...(await this.app.wellness.bootstrap({ name: input.channelName })), niche: 'wellness music' }));
+        input = { ...input, style: input.style || 'music' };
+      }
       const mined = await stage('mining', () => this.mine(input, run));
       const topic = await stage('topic', () => this.pickTopic(input, mined));
       const job = await stage('generation', () => this.generate(input, topic));
@@ -161,9 +166,11 @@ class FactoryPipeline {
       videoFacts.exists ? `Final MP4: ${videoFacts.width}x${videoFacts.height}, ${videoFacts.seconds}s, ${(videoFacts.bytes / 1e6).toFixed(1)} MB` : 'The final MP4 is missing or a placeholder');
     check('video_has_audio', videoFacts.hasAudio, videoFacts.hasAudio ? 'The video carries an audio track' : 'The video has no audio track');
     const audible = videoFacts.meanVolumeDb !== null && videoFacts.meanVolumeDb > SILENT_DB;
-    check('narration_audible', audible, videoFacts.meanVolumeDb === null ? 'Could not measure the narration level' : `Narration mean volume ${videoFacts.meanVolumeDb} dB${audible ? '' : ' (silent)'}`);
+    const music = audio.kind === 'music';
+    const noun = music ? 'Music' : 'Narration';
+    check('narration_audible', audible, videoFacts.meanVolumeDb === null ? `Could not measure the ${noun.toLowerCase()} level` : `${noun} mean volume ${videoFacts.meanVolumeDb} dB${audible ? '' : ' (silent)'}`);
     check('narration_provider', Boolean(audio.provider) && !audio.simulated,
-      audio.provider ? `Narration via ${audio.provider}${audio.model ? ` (${audio.model})` : ''}` : 'No narration provider produced audio');
+      audio.provider ? `${noun} via ${audio.provider}${audio.model ? ` (${audio.model})` : ''}${music && audio.loudness ? `, ${audio.loudness.lufs} LUFS` : ''}` : `No ${noun.toLowerCase()} provider produced audio`);
     // Near-black video is the failure a job status cannot reveal.
     if (videoFacts.meanLuma !== null) {
       check('visuals_visible', videoFacts.meanLuma >= 35, `Mean brightness ${videoFacts.meanLuma} (black is 16 on this scale)${videoFacts.meanLuma < 35 ? '; the picture is very dark' : ''}`, videoFacts.meanLuma >= 20);

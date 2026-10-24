@@ -20,7 +20,11 @@ function textFromSection(section = {}) {
 
 function scriptScenes(script = {}) {
   if (script.storyboard?.shots?.length) {
-    return script.storyboard.shots.map(shot => ({ label: shot.label, scriptText: shot.narrationScript, prompt: shot.prompt }));
+    const ambient = script.storyboard.profile === 'ambient';
+    return script.storyboard.shots.map(shot => ({
+      label: shot.label, scriptText: shot.narrationScript, prompt: shot.prompt || shot.visualDescription || '',
+      ...(ambient ? { weight: shot.durationSec } : {})
+    }));
   }
   const scenes = [];
   if (script.hook?.text || script.title) {
@@ -80,7 +84,7 @@ function durationSeconds(value, fallback = 60) {
 function buildInitialSceneManifest(production = {}, providerResult = {}) {
   const blueprints = scriptScenes(production.script || {});
   const totalDuration = durationSeconds(production.assets?.audio?.seconds || production.estimatedDuration || production.assets?.finalVideo?.duration, Math.max(30, blueprints.length * 8));
-  const wordCounts = blueprints.map(scene => Math.max(8, scene.scriptText.trim().split(/\s+/).filter(Boolean).length));
+  const wordCounts = blueprints.map(scene => scene.weight || Math.max(8, scene.scriptText.trim().split(/\s+/).filter(Boolean).length));
   const totalWords = wordCounts.reduce((sum, count) => sum + count, 0);
   const generated = providerResult.scenes || [];
   const visualAssets = (production.assets?.video?.visualAssets || []).filter(Boolean);

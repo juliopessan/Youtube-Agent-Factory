@@ -6,8 +6,11 @@
 //
 // Flags
 //   --topic <text>         video topic (otherwise the oldest backlog idea is used)
+//   --channel wellness-music   start a wellness music channel (profile + idea backlog) and make a track
+//   --channel-name <text>  name for that channel (default Quiet Hours)
 //   --mine "<a>,<b>"       search terms for dark-channel mining (needs YouTube Data API credentials)
-//   --length short|medium|long      --style tutorial|explainer|list|story|review
+//   --length short|medium|long      --style tutorial|explainer|list|story|review|music
+//                          (a music track is 4, 30 or 60 minutes long for short, medium and long)
 //   --script-file <json>   bring your own script instead of the AI/template writer
 //   --offline              no YouTube credentials: produce locally, never upload
 //   --isolated             use a throwaway database instead of data/youtube_automation.db
@@ -72,6 +75,8 @@ function useScriptFile(agent, file) {
   const run = await new FactoryPipeline(agent).run({
     topic: typeof args.topic === 'string' ? args.topic : null,
     style: typeof args.style === 'string' ? args.style : null,
+    channel: typeof args.channel === 'string' ? args.channel : null,
+    channelName: typeof args['channel-name'] === 'string' ? args['channel-name'] : undefined,
     length: typeof args.length === 'string' ? args.length : 'medium',
     mineTerms: typeof args.mine === 'string' ? args.mine.split(',').map(term => term.trim()).filter(Boolean) : [],
     shorts: !args['no-shorts']

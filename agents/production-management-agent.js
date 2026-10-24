@@ -6,6 +6,7 @@ const { SceneRepairService } = require('../utils/scene-repair-service');
 const { TextOverlayService } = require('../utils/text-overlay-service');
 const { VideoEditorService, deliveryName } = require('../utils/video-editor-service');
 const { getMediaDuration } = require('../utils/ffmpeg');
+const { AmbientMusicService } = require('../utils/ambient-music-service');
 
 class ProductionManagementAgent {
   constructor(db, credentials) {
@@ -18,6 +19,7 @@ class ProductionManagementAgent {
     this.sceneRepair = new SceneRepairService(db, this.aiVideoGenerator, { logger: this.logger });
     this.textOverlays = new TextOverlayService({ logger: this.logger });
     this.videoEditor = new VideoEditorService({ logger: this.logger });
+    this.music = new AmbientMusicService({ logger: this.logger });
   }
 
   async initialize() {
@@ -68,7 +70,7 @@ class ProductionManagementAgent {
         seo,
         status: 'processing',
         assets: {
-          script: await this.processScript(script),
+          script: script.kind === 'music' ? await this.processMusicScript(script) : await this.processScript(script),
           thumbnail: await this.processThumbnail(thumbnail, script),
           audio: null, // Will be generated later
           video: null, // Will be generated later
@@ -96,24 +98,29 @@ class ProductionManagementAgent {
       // Save to database
       await this.db.saveProductionData(productionData);
       
-      // Generate video content
-      await this.generateVideoContent(productionData);
-      
-      // Generate audio narration
-      await this.generateAudioNarration(productionData);
-      
-      // Generate captions
-      await this.generateCaptions(productionData);
-      
-      // Final assembly
-      await this.assembleVideo(productionData);
+      if (script.kind === 'music') {
+        // A wellness track has no narration: the music is the audio and the editor builds the video.
+        await this.produceMusic(productionData);
+      } else {
+        // Generate video content
+        await this.generateVideoContent(productionData);
 
-      // Persist a scene-addressable production manifest for selective review and repair.
-      await this.sceneRepair.initializeProduction(productionData, this.aiVideoGenerator.lastVideoResult || {});
+        // Generate audio narration
+        await this.generateAudioNarration(productionData);
 
-      // SOP-EDV-001 editor: cadence, look, on-screen text, sound design, end screen and export.
-      // Without it (or on failure) the assembled video keeps its plain text overlays.
-      if (!await this.editVideo(productionData)) await this.applyTextOverlays(productionData);
+        // Generate captions
+        await this.generateCaptions(productionData);
+
+        // Final assembly
+        await this.assembleVideo(productionData);
+
+        // Persist a scene-addressable production manifest for selective review and repair.
+        await this.sceneRepair.initializeProduction(productionData, this.aiVideoGenerator.lastVideoResult || {});
+
+        // SOP-EDV-001 editor: cadence, look, on-screen text, sound design, end screen and export.
+        // Without it (or on failure) the assembled video keeps its plain text overlays.
+        if (!await this.editVideo(productionData)) await this.applyTextOverlays(productionData);
+      }
 
       // Mark as ready — or simulated, when no real video could be produced
       const simulated = Boolean(productionData.assets.finalVideo?.simulated);
@@ -426,12 +433,45 @@ class ProductionManagementAgent {
     return elements;
   }
 
+  async processMusicScript(script) {
+    const scriptPath = path.join(__dirname, '..', 'data', 'scripts', `${Date.now()}_track_plan.json`);
+    await fs.writeFile(scriptPath, JSON.stringify(script, null, 2));
+    return { originalPath: scriptPath, ttsPath: null, duration: script.duration, sections: script.music.sections.length };
+  }
+
+  // Composes the track, records it as the production's audio and edits the video around it.
+  async produceMusic(productionData) {
+    const music = productionData.script.music;
+    const root = path.join(__dirname, '..', 'data');
+    const id = productionData.id;
+    const audioPath = path.join(root, 'audio', `${id}_music.wav`);
+    const track = await this.music.compose({
+      mood: music.mood, minutes: music.minutes, seed: music.seed, nature: music.nature,
+      outPath: audioPath, dir: path.join(root, 'production', `${id}_music`)
+    });
+    productionData.assets.audio = {
+      path: audioPath, kind: 'music', format: 'wav', seconds: track.seconds, duration: productionData.estimatedDuration,
+      generatedWith: 'ambient synthesis', provider: 'ambient-synth', model: track.engine, status: 'ready', simulated: false,
+      mood: track.mood, key: track.key, nature: track.nature, loudness: track.loudness, generatedAt: new Date().toISOString(),
+      cost: { provider: 'ambient-synth', amount: 0, currency: 'USD', invoiceRequired: false }, intentionalSilence: false
+    };
+    productionData.assets.video = { visualAssets: [], format: 'mp4', resolution: '1920x1080', fps: 30, generatedWith: 'procedural' };
+    productionData.containsSyntheticMedia = true;
+    productionData.timeline.audioGenerated = new Date().toISOString();
+
+    await this.sceneRepair.initializeProduction(productionData, {});
+    if (!await this.editVideo(productionData)) {
+      productionData.assets.finalVideo = { path: null, simulated: true, error: 'The ambient editor could not render the video' };
+    }
+  }
+
   async editVideo(productionData) {
     try {
       const storyboard = productionData.script?.storyboard;
       if (!storyboard) return false;
       const setting = async key => (this.db?.getSetting ? await this.db.getSetting(key) : null) || '';
-      if (await setting('edit_sop_enabled') === 'false') return false;
+      const ambient = storyboard.profile === 'ambient';
+      if (!ambient && await setting('edit_sop_enabled') === 'false') return false;
 
       const audio = productionData.assets?.audio || {};
       const narrationPath = audio.path && !audio.simulated && await this.aiVideoGenerator.isUsableAudioFile(audio.path) ? audio.path : null;
@@ -442,6 +482,7 @@ class ProductionManagementAgent {
       const outputPath = path.join(root, 'videos', `${id}_final.mp4`);
       const scenes = await this.db.listProductionScenes(id);
       const result = await this.videoEditor.edit({
+        profile: ambient ? 'ambient' : undefined,
         scenes, storyboard, narrationPath, narrationSeconds: audio.seconds || null, outputPath,
         dir: path.join(root, 'production', `${id}_edit`),
         assetsDir: path.join(root, 'assets', 'scenes', id),
@@ -479,8 +520,8 @@ class ProductionManagementAgent {
       const previous = productionData.assets.finalVideo || {};
       productionData.assets.finalVideo = {
         path: outputPath, fileSize: result.evidence.export.bytes, duration: result.evidence.export.seconds,
-        generatedWith: 'SOP editor', resolution: '1920x1080', format: 'mp4', simulated: false,
-        provider: { ...(previous.provider || {}), actualProvider: previous.provider?.actualProvider && !previous.simulated ? previous.provider.actualProvider : 'sop-editor', model: 'ffmpeg', editor: result.evidence.sop },
+        generatedWith: ambient ? 'ambient editor' : 'SOP editor', resolution: '1920x1080', format: 'mp4', simulated: false,
+        provider: { ...(previous.provider || {}), actualProvider: previous.provider?.actualProvider && !previous.simulated ? previous.provider.actualProvider : (ambient ? 'ambient-editor' : 'sop-editor'), model: 'ffmpeg', editor: result.evidence.sop },
         delivery: { name, path: path.join(deliveryDir, name) },
         edit: result.evidence
       };

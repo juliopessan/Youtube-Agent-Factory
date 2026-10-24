@@ -3,7 +3,7 @@ const os = require('os');
 const path = require('path');
 const { runFFmpeg, getMediaDuration } = require('./ffmpeg');
 const { Logger } = require('./logger');
-const { buildOverlays, buildASS, subtitlesFilter } = require('./text-overlay-service');
+const { buildOverlays, buildASS, buildAmbientASS, subtitlesFilter } = require('./text-overlay-service');
 
 // The factory's video editor: it does what the editor in SOP-EDV-001 ("Edição de Vídeo de Canal Dark")
 // does by hand, from the Director's storyboard and the scene manifest, using FFmpeg only.
@@ -41,6 +41,22 @@ const PALETTES = {
   retro_vintage: [['0x2b1a0c', '0x5a3a1a'], ['0x331f10', '0x4a3216'], ['0x24160a', '0x634322']]
 };
 const GRADIENT_TYPES = ['linear', 'radial', 'circular', 'spiral'];
+
+// Relaxation videos: light pastel backdrops, very slow, crossfaded; no cuts, no effects, no hook.
+const AMBIENT = {
+  code: 'AMBIENT-PROFILE-1',
+  crossfadeSeconds: 3,
+  scene: { min: 20, max: 90 },
+  video: { bitrate: '5M', maxrate: '8M', bufsize: '16M' },
+  audioBitrate: '256k'
+};
+const AMBIENT_PALETTES = {
+  twilight: [['0x2a2150', '0x7b5aa6'], ['0x1f2a5a', '0x8a63b0'], ['0x2b1f4a', '0xa670a8']],
+  ocean: [['0x0f4c5c', '0x6fbfc4'], ['0x134e6f', '0x86cdd2'], ['0x0d3b4a', '0x58b3b8']],
+  forest: [['0x16423c', '0x7fb39a'], ['0x1e5245', '0x9fcdae'], ['0x123d33', '0x6aa58a']],
+  lavender: [['0x4b3b6b', '0xc2aee6'], ['0x3d2f63', '0xb59ddb'], ['0x54427a', '0xd0bef0']],
+  sunrise: [['0xd9774a', '0xffd9a8'], ['0xe08a5c', '0xffe6bf'], ['0xcc6a45', '0xfbcf98']]
+};
 const DEFAULT_LOOK = 'eq=contrast=1.08:saturation=0.9:gamma=0.98';
 // The palettes are written dark; this lifts them to a dark-but-engaging backdrop (mean luma ~50-60).
 const PALETTE_LIFT = 2.4;
@@ -343,7 +359,7 @@ class VideoEditorService {
    * A local thumbnail from a clean scene frame plus a short headline (no AI image provider needed).
    * The headline is sized so its box stays under 7% of the 1280x720 frame.
    */
-  async renderThumbnail(frameSource, title, outPath, { seekSeconds = 1 } = {}) {
+  async renderThumbnail(frameSource, title, outPath, { seekSeconds = 1, color = '&H0000D6FF' } = {}) {
     const text = thumbnailHeadline(title);
     const width = 1280;
     const height = 720;
@@ -356,7 +372,7 @@ class VideoEditorService {
       '[Script Info]', 'ScriptType: v4.00+', `PlayResX: ${width}`, `PlayResY: ${height}`, 'WrapStyle: 2', '',
       '[V4+ Styles]',
       'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding',
-      `Style: Thumb,Montserrat,${size},&H0000D6FF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,5,2,1,60,60,70,1`,
+      `Style: Thumb,Montserrat,${size},${color},&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,5,2,1,60,60,70,1`,
       '', '[Events]', 'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text',
       `Dialogue: 0,0:00:00.00,0:00:10.00,Thumb,,0,0,0,,${text.replace(/[{}\\]/g, '')}`
     ].join('\n'), 'utf8');
@@ -393,6 +409,7 @@ class VideoEditorService {
    * @returns {{ path, evidence }} evidence is what the SOP quality gate checks
    */
   async edit(input) {
+    if (input.profile === 'ambient' || input.storyboard?.profile === 'ambient') return this.editAmbient(input);
     const { scenes, storyboard, narrationPath, outputPath, dir, endScreen = true, assetsDir = null } = input;
     if (!scenes?.length) throw new Error('The editor needs the scene manifest');
     const narrationSeconds = input.narrationSeconds || (narrationPath ? await this.getDuration(narrationPath).catch(() => null) : null);
@@ -465,6 +482,137 @@ class VideoEditorService {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
     return { path: outputPath, evidence, generated, thumbnail };
   }
+
+  // ---- Ambient profile -------------------------------------------------------------------------
+
+  async renderAmbientBackdrop(entry, file, palette, seconds) {
+    const colors = AMBIENT_PALETTES[palette] || AMBIENT_PALETTES.twilight;
+    const [c0, c1] = colors[entry.index % colors.length];
+    const type = GRADIENT_TYPES[entry.index % GRADIENT_TYPES.length];
+    return this.run([
+      '-y', '-f', 'lavfi', '-i', `gradients=size=${SOP.width / 4}x${SOP.height / 4}:rate=${SOP.fps}:duration=${seconds.toFixed(3)}:c0=${c0}:c1=${c1}:nb_colors=2:seed=${entry.index + 11}:speed=0.006:type=${type}`,
+      '-vf', `scale=${SOP.width}:${SOP.height}:flags=bicubic`,
+      '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '22', '-pix_fmt', 'yuv420p', '-r', String(SOP.fps), '-an', file
+    ]);
+  }
+
+  /**
+   * Relaxation video: the track is the audio, scenes melt into each other over 3 s, the title appears
+   * once, a soft line opens some movements, and the last 20 s are an end screen.
+   */
+  async editAmbient(input) {
+    const { scenes, storyboard, narrationPath: audioPath, outputPath, dir, endScreen = true, assetsDir = null } = input;
+    if (!scenes?.length) throw new Error('The editor needs the scene manifest');
+    if (!audioPath || !await fileExists(audioPath)) throw new Error('The ambient editor needs the music track');
+    await fs.mkdir(dir, { recursive: true });
+
+    const audioSeconds = input.narrationSeconds || await this.getDuration(audioPath);
+    const endSeconds = endScreen ? SOP.endScreenSeconds : 0;
+    const sceneSeconds = Math.max(20, audioSeconds - endSeconds);
+    const ordered = [...scenes].sort((a, b) => a.position - b.position);
+    const planned = ordered.reduce((sum, scene) => sum + Number(scene.duration || 0), 0) || sceneSeconds;
+    const T = AMBIENT.crossfadeSeconds;
+
+    let cursor = 0;
+    const entries = ordered.map((scene, index) => {
+      const duration = Math.round(((Number(scene.duration || 0) / planned) * sceneSeconds) * SOP.fps) / SOP.fps;
+      const entry = { index, sceneId: scene.id, label: scene.label, start: cursor, duration, asset: scene };
+      cursor += duration;
+      return entry;
+    });
+    const palette = storyboard?.palette || 'twilight';
+    const assets = await Promise.all(entries.map(entry => this.usableAsset(entry.asset)));
+    this.logger.info(`Editing ${entries.length} ambient scenes (${(sceneSeconds / entries.length).toFixed(0)}s each, ${T}s crossfades)`);
+
+    // Every scene is rendered T seconds longer, so the next one can melt into its tail.
+    const files = await mapLimit(entries, this.parallel, async (entry, index) => {
+      const file = path.join(dir, `scene_${String(index).padStart(3, '0')}.mp4`);
+      const length = entry.duration + T;
+      if (assets[index]) await this.renderSegment({ ...entry, duration: length, transitionIn: 'cut', fadeOut: false }, file, { style: 'cinematic', asset: assets[index] });
+      else await this.renderAmbientBackdrop(entry, file, palette, length);
+      return file;
+    });
+    if (endScreen) {
+      const file = path.join(dir, 'end_screen.mp4');
+      await this.renderAmbientBackdrop({ index: entries.length }, file, palette, endSeconds);
+      files.push(file);
+    }
+
+    const shots = storyboard?.shots || [];
+    const captions = entries.flatMap((entry, index) => {
+      const shot = shots.find(item => item.label === entry.label);
+      return shot?.caption && entry.duration >= 14 && index > 0 ? [{ start: entry.start + 4, end: entry.start + 10, text: shot.caption }] : [];
+    });
+    const assPath = path.join(dir, 'text.ass');
+    await fs.writeFile(assPath, buildAmbientASS({
+      title: storyboard?.title, captions,
+      endScreen: endScreen ? { start: sceneSeconds + 1, end: audioSeconds, text: 'Watch next' } : null
+    }), 'utf8');
+
+    const mix = path.join(dir, 'mix.wav');
+    await this.run(['-y', '-i', audioPath, '-af', `aformat=sample_rates=48000:channel_layouts=stereo,atrim=0:${audioSeconds.toFixed(2)}`, mix]);
+
+    // N scenes + the end screen, joined by crossfades: each offset is where the previous scene's tail starts.
+    const chain = [];
+    let label = '[0:v]';
+    let offset = 0;
+    for (let index = 1; index < files.length; index++) {
+      offset += entries[index - 1].duration;
+      const out = `[x${index}]`;
+      chain.push(`${label}[${index}:v]xfade=transition=fade:duration=${T}:offset=${offset.toFixed(3)}${out}`);
+      label = out;
+    }
+    const lut = input.lutPath && await fileExists(input.lutPath) ? `lut3d=file='${input.lutPath.replaceAll('\\', '/').replace(':', '\\:')}'` : 'eq=contrast=1.04:saturation=1.05';
+    chain.push(`${label}${lut},${subtitlesFilter(assPath)},format=yuv420p[v]`);
+    const filter = chain.join(';');
+    const inputs = files.flatMap(file => ['-i', file]);
+    const log = path.join(dir, 'x264');
+    const encode = ['-c:v', 'libx264', '-preset', this.preset, '-b:v', AMBIENT.video.bitrate, '-maxrate', AMBIENT.video.maxrate, '-bufsize', AMBIENT.video.bufsize, '-r', String(SOP.fps), '-passlogfile', log];
+    const staged = path.join(dir, 'edited.mp4');
+    await this.run(['-y', ...inputs, '-filter_complex', filter, '-map', '[v]', ...encode, '-pass', '1', '-an', '-f', 'mp4', process.platform === 'win32' ? 'NUL' : '/dev/null']);
+    await this.run(['-y', ...inputs, '-i', mix, '-filter_complex', filter, '-map', '[v]', '-map', `${files.length}:a:0`, ...encode, '-pass', '2',
+      '-c:a', 'aac', '-b:a', AMBIENT.audioBitrate, '-ar', '48000', '-movflags', '+faststart', '-t', audioSeconds.toFixed(2), staged]);
+
+    let thumbnail = null;
+    if (input.thumbnailPath) {
+      thumbnail = await this.renderThumbnail(files[0], input.title || storyboard?.title || '', input.thumbnailPath, { seekSeconds: 2, color: '&H00FFFFFF' }).catch(error => {
+        this.logger.warn(`Local thumbnail skipped: ${error.message}`);
+        return null;
+      });
+    }
+    const generated = [];
+    if (assetsDir) {
+      await fs.mkdir(assetsDir, { recursive: true });
+      for (const entry of entries.filter(item => !assets[item.index])) {
+        const target = path.join(assetsDir, `${entry.sceneId}.mp4`);
+        await fs.copyFile(files[entry.index], target);
+        generated.push({ sceneId: entry.sceneId, path: target });
+      }
+    }
+    await fs.rename(staged, outputPath).catch(async () => { await fs.copyFile(staged, outputPath); });
+
+    const finalLog = await stderrOf(this.run, ['-hide_banner', '-i', outputPath, '-af', 'ebur128=peak=true', '-vn', '-f', 'null', '-']);
+    const summary = finalLog.split('Summary:').pop();
+    const lufs = /I:\s*(-?[\d.]+) LUFS/.exec(summary);
+    const peak = /Peak:\s*(-?[\d.]+) dBFS/.exec(summary);
+    const probe = await this.probeOutput(outputPath);
+    const durations = entries.map(entry => Number(entry.duration.toFixed(2)));
+    const evidence = {
+      sop: AMBIENT.code, profile: 'ambient', renderedAt: new Date().toISOString(),
+      timeline: {
+        scenes: entries.length, medianSeconds: Number(median(durations).toFixed(2)), minSeconds: Math.min(...durations), maxSeconds: Math.max(...durations),
+        hardCuts: 0, fades: entries.length - 1 + (endScreen ? 1 : 0), crossfadeSeconds: T, durations
+      },
+      visuals: { real: assets.filter(Boolean).length, procedural: assets.filter(asset => !asset).length, style: palette },
+      look: { look: lut.startsWith('lut3d') ? 'lut3d' : 'soft-default' },
+      text: { moments: captions.length + (storyboard?.title ? 1 : 0), font: 'Montserrat Bold', color: '#FFFFFF', firstAt: 2.5 },
+      audio: { source: 'ambient-synth', lufs: lufs ? Number(lufs[1]) : null, truePeakDb: peak ? Number(peak[1]) : null, sfx: [] },
+      endScreen: endScreen ? { startSeconds: Number(sceneSeconds.toFixed(2)), seconds: endSeconds, videos: 2 } : null,
+      export: { ...probe, target: `${AMBIENT.video.bitrate} VBR 2-pass`, maxrate: AMBIENT.video.maxrate, audioBitrate: AMBIENT.audioBitrate }
+    };
+    await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
+    return { path: outputPath, evidence, generated, thumbnail };
+  }
 }
 
-module.exports = { VideoEditorService, SOP, deliveryName, thumbnailHeadline, lift };
+module.exports = { VideoEditorService, SOP, AMBIENT, AMBIENT_PALETTES, deliveryName, thumbnailHeadline, lift };

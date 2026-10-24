@@ -78,6 +78,31 @@ function buildASS(overlays, { vertical = false, endScreen = null } = {}) {
   return `${[...header, ...events].join('\n')}\n`;
 }
 
+/**
+ * Soft text for relaxation videos: a centered title card and quiet breathing lines, white and light,
+ * with long fades. Nothing like the yellow, punchy text of the narrated profile.
+ */
+function buildAmbientASS({ title, captions = [], endScreen = null, vertical = false }) {
+  const [width, height] = vertical ? [1080, 1920] : [1920, 1080];
+  const margin = Math.round(width * 0.08);
+  const header = [
+    '[Script Info]', 'ScriptType: v4.00+', `PlayResX: ${width}`, `PlayResY: ${height}`, 'WrapStyle: 2', '',
+    '[V4+ Styles]',
+    'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding',
+    `Style: Title,${FONT.name},${vertical ? 84 : 76},&H00FFFFFF,&H000000FF,&H40000000,&H80000000,-1,0,0,0,100,100,2,0,1,2,2,5,${margin},${margin},0,1`,
+    `Style: Caption,${FONT.name},${vertical ? 56 : 48},&H00F2F2F2,&H000000FF,&H40000000,&H80000000,0,0,0,0,100,100,1,0,1,2,1,2,${margin},${margin},${Math.round(height * 0.14)},1`,
+    `Style: EndScreen,${FONT.name},${vertical ? 56 : 52},&H00FFFFFF,&H000000FF,&H40000000,&H80000000,-1,0,0,0,100,100,1,0,1,2,1,8,${margin},${margin},${Math.round(height * 0.07)},1`,
+    '', '[Events]', 'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text'
+  ];
+  const events = [];
+  if (title) events.push(`Dialogue: 0,${assTime(2.5)},${assTime(11)},Title,,0,0,0,,{\\fad(1500,1500)}${assText(title).toUpperCase()}`);
+  for (const caption of captions) {
+    events.push(`Dialogue: 0,${assTime(caption.start)},${assTime(caption.end)},Caption,,0,0,0,,{\\fad(1200,1200)}${assText(caption.text)}`);
+  }
+  if (endScreen) events.push(`Dialogue: 0,${assTime(endScreen.start)},${assTime(endScreen.end)},EndScreen,,0,0,0,,{\\fad(800,0)}${assText(endScreen.text).toUpperCase()}`);
+  return `${[...header, ...events].join('\n')}\n`;
+}
+
 function filterPath(filePath) {
   return path.resolve(filePath).replaceAll('\\', '/').replace(':', '\\:').replaceAll("'", "\\'");
 }
@@ -128,4 +153,4 @@ class TextOverlayService {
   }
 }
 
-module.exports = { TextOverlayService, buildOverlays, buildASS, assText, subtitlesFilter, FONTS_DIR };
+module.exports = { TextOverlayService, buildOverlays, buildASS, buildAmbientASS, assText, subtitlesFilter, FONTS_DIR };

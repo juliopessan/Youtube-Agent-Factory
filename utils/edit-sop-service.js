@@ -37,6 +37,7 @@ class EditSopService {
     const edit = video.edit;
     if (!edit) return [{ id: 'sop_edit', passed: false, message: `The video was not edited with ${SOP.code}: no cadence, sound design or export evidence` }];
 
+    if (edit.profile === 'ambient') return this.evaluateAmbient(production, edit);
     const checks = [];
     const add = (id, passed, message) => checks.push({ id, passed: Boolean(passed), message });
     const t = edit.timeline || {};
@@ -88,6 +89,30 @@ class EditSopService {
     add('sop_export', formatOk, `Export ${out.width}x${out.height} ${out.fps}fps ${out.videoCodec}/${out.audioCodec}, ${out.overallKbps} kb/s overall (${out.target}, max ${out.maxrate}; AAC set to ${out.audioBitrate}, measured ${out.audioKbps} kb/s because the encoder spends fewer bits on simple audio)`);
 
     const name = video.delivery?.name;
+    add('sop_naming', NAME_PATTERN.test(name || ''), name ? `Delivered as ${name} in the finalizado folder` : 'The delivery file name [Data]_[NumeroVideo]_[TemaCurto].mp4 is missing');
+    return checks;
+  }
+
+  /** Relaxation video: long scenes, crossfades only, a calm loudness, a title and an end screen. */
+  evaluateAmbient(production, edit) {
+    const checks = [];
+    const add = (id, passed, message) => checks.push({ id, passed: Boolean(passed), message });
+    const t = edit.timeline || {};
+    const audio = edit.audio || {};
+    const out = edit.export || {};
+
+    add('sop_edit', true, `Edited with ${edit.sop}: ${t.scenes} scenes joined by ${t.crossfadeSeconds}s crossfades`);
+    add('ambient_cadence', t.medianSeconds >= 20 && t.medianSeconds <= 90 && t.minSeconds >= 15,
+      `Scenes of ${t.medianSeconds}s (median), from ${t.minSeconds}s to ${t.maxSeconds}s (target 20-90s: nothing should startle a relaxed viewer)`);
+    add('ambient_crossfades', t.hardCuts === 0 && t.fades >= t.scenes - 1, t.hardCuts === 0 ? 'Every scene change is a crossfade' : `${t.hardCuts} hard cut${t.hardCuts === 1 ? '' : 's'} in a relaxation video`);
+    add('ambient_loudness', audio.lufs >= -22 && audio.lufs <= -16 && audio.truePeakDb <= -1,
+      `Loudness ${audio.lufs} LUFS with a true peak of ${audio.truePeakDb} dB (target -22 to -16 LUFS, peak under -1 dB)`);
+    add('ambient_title', edit.text?.moments >= 1, `${edit.text?.moments} on-screen text moment${edit.text?.moments === 1 ? '' : 's'}, starting with the title card`);
+    add('sop_end_screen', Boolean(edit.endScreen) && edit.endScreen.seconds >= 20,
+      edit.endScreen ? `End screen over the last ${edit.endScreen.seconds}s (attach the videos in YouTube Studio)` : 'No 20 second end screen');
+    add('sop_export', out.width === 1920 && out.height === 1080 && Math.round(out.fps) === 30 && out.videoCodec === 'h264' && out.audioCodec === 'aac' && (out.overallKbps === null || out.overallKbps <= 9000),
+      `Export ${out.width}x${out.height} ${out.fps}fps ${out.videoCodec}/${out.audioCodec}, ${out.overallKbps} kb/s overall (${out.target}, max ${out.maxrate})`);
+    const name = production.assets?.finalVideo?.delivery?.name;
     add('sop_naming', NAME_PATTERN.test(name || ''), name ? `Delivered as ${name} in the finalizado folder` : 'The delivery file name [Data]_[NumeroVideo]_[TemaCurto].mp4 is missing');
     return checks;
   }

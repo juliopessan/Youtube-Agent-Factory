@@ -56,6 +56,8 @@ class SystemTest {
       { name: 'Storyboard Text Overlays', test: () => this.testTextOverlays() },
       { name: 'Local Neural Narration', test: () => this.testLocalNarration() },
       { name: 'SOP Video Editor', test: () => this.testSopEditor() },
+      { name: 'Wellness Music Channel', test: () => this.testWellnessChannel() },
+      { name: 'Ambient Music and Editing', test: () => this.testAmbientEditing() },
       { name: 'Factory Pipeline Verification', test: () => this.testFactoryPipeline() },
       { name: 'Walkthrough Module', test: () => this.testWalkthroughModule() },
       { name: 'Logger System', test: () => this.testLogger() },
@@ -3392,6 +3394,140 @@ class SystemTest {
     this.logger.info('SOP editor test completed successfully');
   }
 
+  async testWellnessChannel() {
+    const fs = require('fs').promises;
+    const os = require('os');
+    const { WellnessChannelService, CHANNEL, LENGTH_MINUTES, parseRecipe } = require('./utils/wellness-channel');
+    const { ComplianceService } = require('./utils/compliance-service');
+    const { OperatorService } = require('./utils/operator-service');
+    const { FactoryPipeline } = require('./utils/factory-pipeline');
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'yaa-wellness-'));
+    const db = new Database();
+    db.dbPath = path.join(directory, 'wellness.db');
+    await db.initialize();
+    try {
+      const wellness = new WellnessChannelService(db);
+
+      // Starting the channel is idempotent: the profile is saved once and ideas are never duplicated
+      const first = await wellness.bootstrap({ name: 'Quiet Hours' });
+      const second = await wellness.bootstrap({ name: 'Quiet Hours' });
+      if (first.ideasAdded !== 10 || second.ideasAdded !== 0 || first.defaultStyle !== 'ambient') throw new Error(`Bootstrap must save the profile and fill 10 ideas once: ${JSON.stringify([first, second])}`);
+      const backlog = await db.listContentIdeas();
+      if (!/sleep/i.test(backlog[0].topic) || parseRecipe(backlog[0].angle).mood !== 'sleep') throw new Error('The highest-demand mood (sleep) must come first, with its recipe in the angle');
+
+      // A track plan: movements of at least ~36 s that fill the video before the 20 s end screen
+      const strategy = await wellness.strategyFor(null, {}, 'short');
+      if (strategy.minutes !== LENGTH_MINUTES.short || strategy.contentType !== 'Music' || strategy.mood !== 'sleep') throw new Error(`Unexpected strategy: ${JSON.stringify(strategy)}`);
+      const track = wellness.planTrack(strategy);
+      const planned = track.storyboard.shots.reduce((sum, shot) => sum + shot.durationSec, 0);
+      if (track.kind !== 'music' || track.storyboard.profile !== 'ambient' || Math.abs(planned - (240 - 20)) > 0.5 || track.storyboard.shots.some(shot => shot.durationSec < 36)) throw new Error('Movements must cover the track minus the end screen, none shorter than 36 s');
+      if (track.fullScript.length < 200 || track.claims.length) throw new Error('The plan must be readable text with no factual claims');
+      const other = await wellness.strategyFor('Calm Down Music • Ocean Waves & Soft Piano Tones', {}, 'medium');
+      if (other.mood !== 'calm' || other.nature !== 'ocean' || other.minutes !== 30) throw new Error('A topic must resolve to its mood and nature layer');
+
+      // SEO: chapters, disclosure, category Music and no medical promises; the brand policy agrees
+      const seo = wellness.seo(track, strategy);
+      if (seo.title.length > 100 || seo.tags.length < 3 || seo.categoryId !== '10' || !/Chapters/.test(seo.description) || !/generated with software/.test(seo.description)) throw new Error('SEO must carry chapters, the synthesis disclosure and the Music category');
+      const quality = await new OperatorService(db).runQualityChecks({
+        script: track, seo, strategy,
+        assets: { finalVideo: { path: 'x.mp4', simulated: true }, audio: { provider: 'ambient-synth', path: path.join(__dirname, 'package.json'), kind: 'music', simulated: false } }
+      }, { bannedTopics: CHANNEL.bannedTopics });
+      if (!quality.checks.find(check => check.id === 'brand_policy').passed) throw new Error('The channel must not trip its own banned-topic policy');
+
+      // Compliance for a track is about original music, not about hooks
+      const compliance = new ComplianceService(db);
+      const original = await compliance.review({ script: { kind: 'music' }, assets: { audio: { provider: 'ambient-synth' } } });
+      const borrowed = await compliance.review({ script: { kind: 'music' }, assets: { audio: { provider: 'upload' } } });
+      if (original.length !== 1 || !original[0].passed || borrowed[0].passed) throw new Error('A track must pass only when its music is generated');
+      const report = await compliance.report({ script: { kind: 'music' }, assets: { audio: { provider: 'ambient-synth' } } });
+      if (!report.mandatoryDone || report.interventions.length) throw new Error('A track has no spoken-word interventions to complete');
+
+      // The orchestrator opens the channel, then makes a track without being given a topic or script
+      let jobInput = null;
+      const pipelineApp = {
+        offline: true, agents: {}, wellness,
+        db: {
+          listContentIdeas: async () => backlog, updateContentIdea: async () => null,
+          getProductionBundle: async () => null, listShortClips: async () => []
+        },
+        startGenerationJob: async input => { jobInput = input; return { id: 'job-1' }; },
+        waitForGenerationJob: async () => ({ id: 'job-1', status: 'failed', stage: 'script', error: 'stop here' })
+      };
+      const run = await new FactoryPipeline(pipelineApp, { reportsRoot: directory, logger: { info() {}, warn() {} } }).run({ channel: 'wellness-music', length: 'short' });
+      const channelStage = run.stages.find(stage => stage.name === 'channel');
+      if (!channelStage || channelStage.status !== 'ok' || channelStage.niche !== 'wellness music') throw new Error('The run must open the channel first');
+      if (jobInput.style !== 'music' || jobInput.length !== 'short' || !/sleep/i.test(jobInput.topic) || parseRecipe(jobInput.strategyContext.angle).mood !== 'sleep') throw new Error(`The job must be a music track picked from the backlog: ${JSON.stringify(jobInput)}`);
+    } finally {
+      await db.close();
+      await fs.rm(directory, { recursive: true, force: true });
+    }
+    this.logger.info('Wellness channel test completed successfully');
+  }
+
+  async testAmbientEditing() {
+    const fs = require('fs').promises;
+    const os = require('os');
+    const { runFFmpeg } = require('./utils/ffmpeg');
+    const { AmbientMusicService } = require('./utils/ambient-music-service');
+    const { VideoEditorService } = require('./utils/video-editor-service');
+    const { EditSopService } = require('./utils/edit-sop-service');
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'yaa-ambient-'));
+    const quiet = { info() {}, warn() {} };
+    try {
+      // The plain FFmpeg drone is the fallback when Python is not set up
+      const fallback = new AmbientMusicService({ python: path.join(directory, 'no-python'), logger: quiet });
+      if (await fallback.hasSynth()) throw new Error('A missing interpreter must disable the synthesizer');
+      const drone = await fallback.compose({ mood: 'calm', minutes: 0.3, nature: 'none', outPath: path.join(directory, 'drone.wav'), dir: path.join(directory, 'w1') });
+      if (drone.engine !== 'ffmpeg-drone' || Math.abs(drone.seconds - 18) > 1 || !(drone.loudness.lufs > -24 && drone.loudness.lufs < -14)) throw new Error(`The fallback drone must be a normalized track: ${JSON.stringify(drone)}`);
+
+      // The numpy synthesizer, when installed: original pads and plucks, a rain bed, loudness near -19 LUFS
+      let track = path.join(directory, 'drone.wav');
+      const synth = new AmbientMusicService({ logger: quiet });
+      if (await synth.hasSynth()) {
+        track = path.join(directory, 'pads.wav');
+        const pads = await synth.compose({ mood: 'sleep', minutes: 1, nature: 'rain', seed: 5, outPath: track, dir: path.join(directory, 'w2') });
+        if (pads.engine !== 'numpy-pads' || pads.chords.length < 2 || Math.abs(pads.loudness.lufs + 19) > 1.5 || pads.loudness.truePeakDb > -1) throw new Error(`The synthesized track is off target: ${JSON.stringify(pads.loudness)}`);
+      }
+      const trackSeconds = 60;
+      const padded = path.join(directory, 'music60.wav');
+      await runFFmpeg(['-y', '-i', track, '-af', `apad=whole_dur=${trackSeconds}`, '-t', String(trackSeconds), padded]);
+
+      // The ambient edit: crossfades instead of cuts, light backdrops, a title, a white thumbnail
+      const editor = new VideoEditorService({ logger: quiet });
+      const scene = (position, duration) => ({ id: `a${position}`, position, label: `Movement ${position + 1}`, duration, assetPath: null, assetType: 'missing' });
+      const storyboard = {
+        profile: 'ambient', palette: 'ocean', title: 'Calm Down Music',
+        shots: [1, 2, 3].map(position => ({ label: `Movement ${position}`, caption: `Breathe ${position}`, narrativeRole: 'meat' }))
+      };
+      const output = path.join(directory, 'ambient.mp4');
+      const result = await editor.edit({
+        profile: 'ambient', scenes: [scene(0, 14), scene(1, 14), scene(2, 14)], storyboard, narrationPath: padded, outputPath: output,
+        dir: path.join(directory, 'work'), assetsDir: path.join(directory, 'assets'), thumbnailPath: path.join(directory, 'thumb.jpg'), title: 'Calm Down Music • Ocean Waves'
+      });
+      const evidence = result.evidence;
+      if (evidence.profile !== 'ambient' || evidence.timeline.hardCuts !== 0 || evidence.timeline.fades !== 3 || evidence.text.moments < 1) throw new Error(`Ambient evidence is wrong: ${JSON.stringify(evidence.timeline)}`);
+      if (evidence.export.width !== 1920 || evidence.export.fps !== 30 || Math.abs(evidence.export.seconds - trackSeconds) > 0.6) throw new Error(`Ambient export is wrong: ${JSON.stringify(evidence.export)}`);
+      if (result.generated.length !== 3 || !result.thumbnail || result.thumbnail.areaShare > 0.07) throw new Error('Scene backdrops must be handed back and the thumbnail text kept small');
+      const luma = async second => {
+        const log = await runFFmpeg(['-hide_banner', '-ss', String(second), '-i', output, '-frames:v', '1', '-vf', 'signalstats,metadata=print:key=lavfi.signalstats.YAVG', '-an', '-f', 'null', '-']).then(r => String(r.stderr), e => String(e.stderr));
+        return Number(/YAVG=([\d.]+)/.exec(log)?.[1]);
+      };
+      // Light pastel backdrops, and no dip to black in the middle of a crossfade
+      for (const second of [5, 14.8, 30]) if (!(await luma(second) > 60)) throw new Error(`The ambient picture must stay light, also mid-crossfade (t=${second})`);
+
+      // The gate for this profile
+      const gate = new EditSopService({ getSetting: async () => 'false' }).evaluate({ assets: { finalVideo: { edit: evidence, delivery: { name: '20261024_01_calm-down-music.mp4' } } } });
+      for (const id of ['sop_edit', 'ambient_crossfades', 'ambient_title', 'sop_end_screen', 'sop_export', 'sop_naming']) {
+        if (!gate.find(check => check.id === id)?.passed) throw new Error(`The ambient gate must pass ${id}: ${JSON.stringify(gate.filter(check => !check.passed))}`);
+      }
+      const cut = new EditSopService({}).evaluate({ assets: { finalVideo: { edit: { ...evidence, timeline: { ...evidence.timeline, hardCuts: 4, medianSeconds: 6 } } } } });
+      if (cut.find(check => check.id === 'ambient_crossfades').passed || cut.find(check => check.id === 'ambient_cadence').passed) throw new Error('Hard cuts and fast scenes do not belong in a relaxation video');
+    } finally {
+      await fs.rm(directory, { recursive: true, force: true });
+    }
+    this.logger.info('Ambient music and editing test completed successfully');
+  }
+
   async testWalkthroughModule() {
     const { SetupWalkthrough, AI_PROVIDER_GUIDE, VIDEO_PROVIDER_GUIDE } = require('./walkthrough');
     const { PROVIDERS, GEMINI_MODELS, GEMINI_DEFAULT_MODEL } = require('./utils/ai-text-service');
@@ -3532,6 +3668,8 @@ class SystemTest {
       './utils/local-tts-service',
       './utils/video-editor-service',
       './utils/edit-sop-service',
+      './utils/wellness-channel',
+      './utils/ambient-music-service',
       './utils/factory-pipeline',
       './utils/discoverability-service',
       './utils/discoverability-adapters/darkzseo'
