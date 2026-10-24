@@ -84,8 +84,8 @@ class EditSopService {
 
     const out = edit.export || {};
     const formatOk = out.width === SOP.width && out.height === SOP.height && Math.round(out.fps) === SOP.fps && out.videoCodec === 'h264' && out.audioCodec === 'aac' &&
-      (out.audioKbps === null || out.audioKbps >= 300) && (out.overallKbps === null || out.overallKbps <= 16500);
-    add('sop_export', formatOk, `Export ${out.width}x${out.height} ${out.fps}fps ${out.videoCodec}/${out.audioCodec}, ${out.overallKbps} kb/s overall (${edit.export?.target}, max ${edit.export?.maxrate})`);
+      out.audioBitrate === '320k' && (out.audioKbps === null || out.audioKbps >= 192) && (out.overallKbps === null || out.overallKbps <= 16500);
+    add('sop_export', formatOk, `Export ${out.width}x${out.height} ${out.fps}fps ${out.videoCodec}/${out.audioCodec}, ${out.overallKbps} kb/s overall (${out.target}, max ${out.maxrate}; AAC set to ${out.audioBitrate}, measured ${out.audioKbps} kb/s because the encoder spends fewer bits on simple audio)`);
 
     const name = video.delivery?.name;
     add('sop_naming', NAME_PATTERN.test(name || ''), name ? `Delivered as ${name} in the finalizado folder` : 'The delivery file name [Data]_[NumeroVideo]_[TemaCurto].mp4 is missing');

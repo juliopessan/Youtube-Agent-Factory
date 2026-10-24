@@ -19,7 +19,7 @@ async function stderrOf(args) {
 
 // Stream facts parsed from FFmpeg's own banner: works with the bundled ffmpeg-static (no ffprobe).
 async function probe(file) {
-  const info = { exists: false, bytes: 0, seconds: null, width: null, height: null, hasVideo: false, hasAudio: false, meanVolumeDb: null };
+  const info = { exists: false, bytes: 0, seconds: null, width: null, height: null, hasVideo: false, hasAudio: false, meanVolumeDb: null, meanLuma: null };
   try {
     info.bytes = (await fs.stat(file)).size;
     info.exists = info.bytes > 0;
@@ -30,6 +30,12 @@ async function probe(file) {
   const banner = await stderrOf(['-hide_banner', '-i', file]);
   const video = /Stream #\d+:\d+[^\n]*Video:[^\n]*?(\d{2,5})x(\d{2,5})/.exec(banner);
   if (video) Object.assign(info, { hasVideo: true, width: Number(video[1]), height: Number(video[2]) });
+  // Real brightness: signalstats on keyframes (scaling to 1x1 would only sample a corner).
+  if (info.hasVideo && info.seconds > 3 && /\.(mp4|mov|mkv|webm)$/i.test(file)) {
+    const stats = await stderrOf(['-hide_banner', '-skip_frame', 'nokey', '-i', file, '-vf', 'signalstats,metadata=print:key=lavfi.signalstats.YAVG', '-an', '-f', 'null', '-']);
+    const values = [...stats.matchAll(/YAVG=([\d.]+)/g)].map(match => Number(match[1]));
+    if (values.length) info.meanLuma = Number((values.reduce((sum, value) => sum + value, 0) / values.length).toFixed(1));
+  }
   info.hasAudio = /Stream #\d+:\d+[^\n]*Audio:/.test(banner);
   if (info.hasAudio) {
     const levels = await stderrOf(['-hide_banner', '-i', file, '-vn', '-af', 'volumedetect', '-f', 'null', '-']);
@@ -158,6 +164,10 @@ class FactoryPipeline {
     check('narration_audible', audible, videoFacts.meanVolumeDb === null ? 'Could not measure the narration level' : `Narration mean volume ${videoFacts.meanVolumeDb} dB${audible ? '' : ' (silent)'}`);
     check('narration_provider', Boolean(audio.provider) && !audio.simulated,
       audio.provider ? `Narration via ${audio.provider}${audio.model ? ` (${audio.model})` : ''}` : 'No narration provider produced audio');
+    // Near-black video is the failure a job status cannot reveal.
+    if (videoFacts.meanLuma !== null) {
+      check('visuals_visible', videoFacts.meanLuma >= 35, `Mean brightness ${videoFacts.meanLuma} (black is 16 on this scale)${videoFacts.meanLuma < 35 ? '; the picture is very dark' : ''}`, videoFacts.meanLuma >= 20);
+    }
     const expected = Number(bundle.script?.storyboard?.summary?.totalSeconds || 0);
     if (expected && videoFacts.seconds) {
       const drift = Math.abs(videoFacts.seconds - expected) / expected;
@@ -167,7 +177,10 @@ class FactoryPipeline {
     const thumbnail = bundle.assets?.thumbnail?.path;
     const thumbFacts = thumbnail ? await this.probe(thumbnail) : { exists: false };
     run.files.thumbnail = thumbnail || null;
-    check('thumbnail', thumbFacts.exists, thumbFacts.exists ? 'Thumbnail rendered' : 'Thumbnail missing', true);
+    // A ".info" file is the designer's placeholder, not an image.
+    const realThumbnail = thumbFacts.exists && /\.(png|jpe?g|webp)$/i.test(thumbnail) && !bundle.assets.thumbnail.simulated;
+    check('thumbnail', realThumbnail,
+      realThumbnail ? `Thumbnail ${thumbFacts.width}x${thumbFacts.height}${bundle.assets.thumbnail.text ? ` ("${bundle.assets.thumbnail.text}", text ${Math.round((bundle.assets.thumbnail.textAreaShare || 0) * 1000) / 10}% of the frame)` : ''}` : 'The thumbnail is a placeholder, not an image', true);
 
     const storyboard = bundle.script?.storyboard;
     check('storyboard', Boolean(storyboard?.shots?.length),

@@ -42,6 +42,27 @@ const PALETTES = {
 };
 const GRADIENT_TYPES = ['linear', 'radial', 'circular', 'spiral'];
 const DEFAULT_LOOK = 'eq=contrast=1.08:saturation=0.9:gamma=0.98';
+// The palettes are written dark; this lifts them to a dark-but-engaging backdrop (mean luma ~50-60).
+const PALETTE_LIFT = 2.4;
+
+function lift(hex, factor = PALETTE_LIFT) {
+  const value = String(hex).replace('0x', '');
+  const channels = [0, 2, 4].map(index => Math.min(255, Math.round(parseInt(value.slice(index, index + 2), 16) * factor)));
+  return `0x${channels.map(channel => channel.toString(16).padStart(2, '0')).join('')}`;
+}
+
+// A short, readable thumbnail headline: salient words only, at most 16 characters (SOP-EDV-001 keeps
+// thumbnail text under 7% of the frame).
+const THUMBNAIL_STOPWORDS = new Set('de da do das dos que e o a os as um uma para por com em no na seu sua the of and to in for your you how'.split(' '));
+function thumbnailHeadline(title, limit = 16) {
+  const words = String(title || '').trim().split(/\s+/).filter(word => !THUMBNAIL_STOPWORDS.has(word.toLowerCase()));
+  const chosen = [];
+  for (const word of words) {
+    if ([...chosen, word].join(' ').length > limit) break;
+    chosen.push(word);
+  }
+  return (chosen.length ? chosen : words.slice(0, 1)).join(' ').toUpperCase().slice(0, limit + 4);
+}
 
 function frames(seconds) {
   return Math.max(1, Math.round(seconds * SOP.fps));
@@ -192,21 +213,21 @@ class VideoEditorService {
     // No footage for this scene: a slow animated gradient in the style's palette, rendered at half
     // size (it is smooth) and scaled up, with a vignette. Different type and seed on every scene.
     const palettes = PALETTES[style] || PALETTES.cinematic;
-    const [c0, c1] = palettes[entry.index % palettes.length];
+    const [c0, c1] = palettes[entry.index % palettes.length].map(color => lift(color));
     const type = GRADIENT_TYPES[entry.index % GRADIENT_TYPES.length];
     return this.run([
       '-y', '-f', 'lavfi', '-i', `gradients=size=${SOP.width / 2}x${SOP.height / 2}:rate=${SOP.fps}:duration=${D}:c0=${c0}:c1=${c1}:nb_colors=2:seed=${entry.index + 3}:speed=0.02:type=${type}`,
-      '-vf', [`scale=${size}:flags=bicubic`, 'vignette=PI/5'].join(','), ...common
+      '-vf', [`scale=${size}:flags=bicubic`, 'vignette=PI/8'].join(','), ...common
     ]);
   }
 
   async renderEndScreen(file, seconds, style, index) {
-    const [c0, c1] = (PALETTES[style] || PALETTES.cinematic)[index % 3];
+    const [c0, c1] = (PALETTES[style] || PALETTES.cinematic)[index % 3].map(color => lift(color));
     // Two faint frames mark where the creator places the YouTube end-screen video elements.
     const box = x => `drawbox=x=${x}:y=300:w=720:h=405:color=white@0.35:t=3`;
     return this.run([
       '-y', '-f', 'lavfi', '-i', `gradients=size=${SOP.width / 2}x${SOP.height / 2}:rate=${SOP.fps}:duration=${seconds}:c0=${c0}:c1=${c1}:nb_colors=2:seed=99:speed=0.01:type=radial`,
-      '-vf', `scale=${SOP.width}:${SOP.height}:flags=bicubic,vignette=PI/4,${box(150)},${box(1050)}`,
+      '-vf', `scale=${SOP.width}:${SOP.height}:flags=bicubic,vignette=PI/6,${box(150)},${box(1050)}`,
       '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p', '-r', String(SOP.fps), '-an', file
     ]);
   }
@@ -318,6 +339,36 @@ class VideoEditorService {
     return { look: lut ? 'lut3d' : 'channel-default', lutFile: lut ? path.basename(lutPath) : null };
   }
 
+  /**
+   * A local thumbnail from a clean scene frame plus a short headline (no AI image provider needed).
+   * The headline is sized so its box stays under 7% of the 1280x720 frame.
+   */
+  async renderThumbnail(frameSource, title, outPath, { seekSeconds = 1 } = {}) {
+    const text = thumbnailHeadline(title);
+    const width = 1280;
+    const height = 720;
+    let size = 96;
+    // Montserrat Bold averages about 0.66 em per character; shrink until the box fits the 7% budget.
+    while (size > 40 && (text.length * size * 0.66) * (size * 1.25) > width * height * 0.07) size -= 4;
+    const dir = path.dirname(outPath);
+    const ass = path.join(dir, `${path.basename(outPath, path.extname(outPath))}.thumb.ass`);
+    await fs.writeFile(ass, [
+      '[Script Info]', 'ScriptType: v4.00+', `PlayResX: ${width}`, `PlayResY: ${height}`, 'WrapStyle: 2', '',
+      '[V4+ Styles]',
+      'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding',
+      `Style: Thumb,Montserrat,${size},&H0000D6FF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,5,2,1,60,60,70,1`,
+      '', '[Events]', 'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text',
+      `Dialogue: 0,0:00:00.00,0:00:10.00,Thumb,,0,0,0,,${text.replace(/[{}\\]/g, '')}`
+    ].join('\n'), 'utf8');
+    await this.run([
+      '-y', '-ss', String(seekSeconds), '-i', frameSource, '-frames:v', '1',
+      '-vf', `scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},eq=contrast=1.12:saturation=1.1,${subtitlesFilter(ass)}`,
+      '-q:v', '2', outPath
+    ]);
+    await fs.unlink(ass).catch(() => {});
+    return { path: outPath, text, sizePx: size, areaShare: Number(((text.length * size * 0.66 * size * 1.25) / (width * height)).toFixed(3)) };
+  }
+
   async probeOutput(file) {
     const banner = await stderrOf(this.run, ['-hide_banner', '-i', file]);
     const video = /Video: (\w+)[^\n]*?(\d{3,5})x(\d{3,5})[^\n]*?(?:(\d+) kb\/s, )?([\d.]+) fps/.exec(banner);
@@ -373,6 +424,14 @@ class VideoEditorService {
 
     const { mix, evidence: sound } = await this.mixSound({ narrationPath, totalSeconds, timeline, overlays, musicPath: input.musicPath, dir });
     const staged = path.join(dir, 'edited.mp4');
+    // The thumbnail comes from a clean scene (no burned-in text), so it is made before the dir is cleaned.
+    let thumbnail = null;
+    if (input.thumbnailPath) {
+      thumbnail = await this.renderThumbnail(files[Math.min(1, files.length - 1)], input.title || storyboard?.title || '', input.thumbnailPath).catch(error => {
+        this.logger.warn(`Local thumbnail skipped: ${error.message}`);
+        return null;
+      });
+    }
     const look = await this.exportVideo({
       segments: files, mixPath: mix, assPath, lutPath: input.lutPath, outputPath: staged, totalSeconds, dir,
       fades: this.fadeFilters(timeline, endScreen)
@@ -404,8 +463,8 @@ class VideoEditorService {
       export: { ...probe, target: `${SOP.video.bitrate} VBR 2-pass`, maxrate: SOP.video.maxrate, audioBitrate: SOP.audioBitrate }
     };
     await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
-    return { path: outputPath, evidence, generated };
+    return { path: outputPath, evidence, generated, thumbnail };
   }
 }
 
-module.exports = { VideoEditorService, SOP, deliveryName };
+module.exports = { VideoEditorService, SOP, deliveryName, thumbnailHeadline, lift };

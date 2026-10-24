@@ -3246,7 +3246,7 @@ class SystemTest {
       if ((await probe(path.join(directory, 'missing.mp4'))).exists) throw new Error('A missing file must not exist');
 
       // A stub app drives the orchestrator through topic, generation, verification and the report
-      const makeApp = ({ jobStatus = 'completed', backlog = [] }) => ({
+      const makeApp = ({ jobStatus = 'completed', backlog = [], thumbnailPath = path.join(directory, 'thumb.jpg') }) => ({
         offline: true, agents: {},
         compliance: { report: async () => ({ mandatoryDone: false, checks: [{ id: 'compliance_hook', passed: true, message: 'ok' }, { id: 'compliance_originality', passed: false, message: 'confirm' }] }) },
         db: {
@@ -3254,7 +3254,7 @@ class SystemTest {
           updateContentIdea: async () => null,
           getProductionBundle: async () => ({
             review_status: 'needs_review',
-            assets: { finalVideo: { path: loud, simulated: false, provider: { actualProvider: 'slideshow' }, overlays: { count: 2 } }, audio: { provider: 'kokoro', model: 'kokoro-v1.0' }, thumbnail: { path: loud } },
+            assets: { finalVideo: { path: loud, simulated: false, provider: { actualProvider: 'slideshow' }, overlays: { count: 2 } }, audio: { provider: 'kokoro', model: 'kokoro-v1.0' }, thumbnail: { path: thumbnailPath } },
             script: { metadata: { generationSource: 'script-file' }, storyboard: { shots: [{}], styleLabel: 'Noir', summary: { shots: 5, roleCounts: { rehook: 2 }, generatedClips: 3, totalSeconds: 2 } } },
             scenes: [{}, {}], qualityChecks: [{ id: 'video', passed: true, blocking: true, message: 'ok' }], editorData: {}
           }),
@@ -3263,13 +3263,17 @@ class SystemTest {
         startGenerationJob: async () => ({ id: 'job-1' }),
         waitForGenerationJob: async () => ({ id: 'job-1', status: jobStatus, stage: 'production', productionId: 'prod-1', title: 'Teste', error: jobStatus === 'completed' ? null : 'provider exploded' })
       });
-      const probeStub = facts => async () => ({ exists: true, bytes: 2e6, seconds: 2, width: 1920, height: 1080, hasVideo: true, hasAudio: true, meanVolumeDb: -22, ...facts });
+      const probeStub = facts => async () => ({ exists: true, bytes: 2e6, seconds: 2, width: 1920, height: 1080, hasVideo: true, hasAudio: true, meanVolumeDb: -22, meanLuma: 60, ...facts });
       const logger = { info() {}, warn() {} };
 
       const good = await new FactoryPipeline(makeApp({}), { reportsRoot: directory, probe: probeStub({}), logger }).run({ topic: 'Tema' });
       if (!good.passed || good.provenance.script !== 'script-file' || good.provenance.upload !== 'not performed (offline mode)') throw new Error(`A healthy run must pass and record what was real: ${JSON.stringify(good.checks.filter(c => c.status === 'failed'))}`);
       for (const file of ['report.json', 'report.md', 'deliverables/video.mp4']) await fs.stat(path.join(good.reportDir, file));
 
+      const dark = await new FactoryPipeline(makeApp({}), { reportsRoot: directory, probe: probeStub({ meanLuma: 17 }), logger }).run({ topic: 'Tema' });
+      if (dark.passed || dark.checks.find(check => check.id === 'visuals_visible').status !== 'failed') throw new Error('A near-black picture must fail even when the job completed');
+      const placeholder = await new FactoryPipeline(makeApp({ thumbnailPath: path.join(directory, 'thumbnail.info') }), { reportsRoot: directory, probe: probeStub({}), logger }).run({ topic: 'Tema' });
+      if (placeholder.checks.find(check => check.id === 'thumbnail').status === 'ok') throw new Error('A placeholder thumbnail must not be reported as rendered');
       const mute = await new FactoryPipeline(makeApp({}), { reportsRoot: directory, probe: probeStub({ meanVolumeDb: -91 }), logger }).run({ topic: 'Tema' });
       if (mute.passed || mute.checks.find(c => c.id === 'narration_audible').status !== 'failed') throw new Error('A silent video must fail even when the job completed');
       const failedJob = await new FactoryPipeline(makeApp({ jobStatus: 'failed' }), { reportsRoot: directory, probe: probeStub({}), logger }).run({ topic: 'Tema' });
@@ -3299,11 +3303,12 @@ class SystemTest {
     const fs = require('fs').promises;
     const os = require('os');
     const { runFFmpeg } = require('./utils/ffmpeg');
-    const { VideoEditorService, deliveryName, SOP } = require('./utils/video-editor-service');
+    const { VideoEditorService, deliveryName, thumbnailHeadline, SOP } = require('./utils/video-editor-service');
     const { EditSopService, longestRun } = require('./utils/edit-sop-service');
     const { splitIntoChunks } = require('./utils/video-director-service');
 
     // Delivery name: [Data]_[NumeroVideo]_[TemaCurto].mp4
+    if (thumbnailHeadline('5 armadilhas mentais que sabotam o seu dinheiro') !== '5 ARMADILHAS' || thumbnailHeadline('O segredo').length > 20) throw new Error('The thumbnail headline must be short and salient');
     if (deliveryName({ date: new Date('2026-10-24T10:00:00Z'), number: 3, title: '5 armadilhas mentais que sabotam o seu dinheiro' }) !== '20261024_03_5-armadilhas-mentais-que.mp4') throw new Error('The delivery name must follow the SOP');
 
     // Chunking keeps every scene under the cap and cycles the target lengths
@@ -3332,7 +3337,7 @@ class SystemTest {
       sop: SOP.code, timeline: { scenes: 35, hardCuts: 4, fades: 30, medianSeconds: 7.1, minSeconds: 4.4, maxSeconds: 10.8, durations: [6.4, 7.2, 8.1, 5.6, 9.2, 7.7, 10, 6] },
       look: { look: 'channel-default' }, text: { moments: 5, font: 'Montserrat Bold', color: '#FFD600', sizePt: 64, firstAt: 0.3 },
       audio: { narrationPeakDb: -4.5, musicMeanDb: -19, musicSource: 'procedural-drone', sfx: [{ type: 'stinger', at: 0.15 }, { type: 'whoosh', at: 60 }, { type: 'whoosh', at: 180 }] },
-      endScreen: { seconds: 20, videos: 2 }, export: { width: 1920, height: 1080, fps: 30, videoCodec: 'h264', audioCodec: 'aac', audioKbps: 320, overallKbps: 9000, target: '12M VBR 2-pass', maxrate: '16M' }
+      endScreen: { seconds: 20, videos: 2 }, export: { width: 1920, height: 1080, fps: 30, videoCodec: 'h264', audioCodec: 'aac', audioKbps: 242, audioBitrate: '320k', overallKbps: 9000, target: '12M VBR 2-pass', maxrate: '16M' }
     };
     const sop = new EditSopService({ getSetting: async () => 'false' });
     const production = { assets: { finalVideo: { edit: goodEdit, delivery: { name: '20261024_01_armadilhas-mentais.mp4' } } }, scenes: [{ assetPath: 'a.mp4' }, { assetPath: 'b.mp4' }] };
@@ -3353,14 +3358,14 @@ class SystemTest {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'yaa-edit-'));
     try {
       const narration = path.join(directory, 'narration.wav');
-      await runFFmpeg(['-y', '-f', 'lavfi', '-i', 'sine=frequency=300:duration=12', '-af', 'volume=-14dB', narration]);
-      const shortScenes = [scene(0, 'Hook 1', 3), scene(1, 'Meat 2', 3), scene(2, 'Meat 3', 3), scene(3, 'Meat 4', 3)];
+      await runFFmpeg(['-y', '-f', 'lavfi', '-i', 'sine=frequency=300:duration=12', '-af', 'volume=10dB', narration]);
+      const shortScenes = [scene(0, 'Hook 1', 3), scene(1, 'Meat 2', 3), scene(2, 'Meat 3', 5), scene(3, 'Meat 4', 3)];
       const shortBoard = { style: 'noir', shots: [
         { label: 'Hook 1', narrativeRole: 'hook', showTextOverlay: true, headline: 'UMA AFIRMAÇÃO' }, { label: 'Meat 2', narrativeRole: 'meat' },
         { label: 'Meat 3', narrativeRole: 'meat', showTextOverlay: true, headline: '1979' }, { label: 'Meat 4', narrativeRole: 'meat' }
       ] };
       const output = path.join(directory, 'edited.mp4');
-      const result = await editor.edit({ scenes: shortScenes, storyboard: shortBoard, narrationPath: narration, outputPath: output, dir: path.join(directory, 'work'), assetsDir: path.join(directory, 'assets') });
+      const result = await editor.edit({ scenes: shortScenes, storyboard: shortBoard, narrationPath: narration, outputPath: output, dir: path.join(directory, 'work'), assetsDir: path.join(directory, 'assets'), thumbnailPath: path.join(directory, 'thumb.jpg'), title: '5 armadilhas mentais que sabotam o seu dinheiro' });
       const evidence = result.evidence;
       const out = evidence.export;
       if (out.width !== 1920 || out.height !== 1080 || out.fps !== 30 || out.videoCodec !== 'h264' || out.audioCodec !== 'aac') throw new Error(`Export does not follow the SOP: ${JSON.stringify(out)}`);
@@ -3368,12 +3373,13 @@ class SystemTest {
       if (evidence.audio.sfx.length < 2 || evidence.audio.musicMeanDb < -20 || evidence.audio.musicMeanDb > -18 || evidence.audio.narrationPeakDb < -6 || evidence.audio.narrationPeakDb > -3) throw new Error(`Sound design is off: ${JSON.stringify(evidence.audio)}`);
       if (evidence.text.moments !== 2 || !evidence.endScreen || evidence.visuals.procedural !== 4) throw new Error('Text, end screen and procedural scenes were not recorded');
       if (result.generated.length !== 4) throw new Error('Procedural scenes must be handed back as real, replaceable assets');
-      const luma = async (second) => {
-        const frame = path.join(directory, `f${second}.png`);
-        await runFFmpeg(['-y', '-ss', String(second), '-i', output, '-frames:v', '1', '-vf', 'scale=1:1,format=gray', '-f', 'rawvideo', frame]);
-        return (await fs.readFile(frame))[0];
+      // signalstats reports the real frame average (scaling to 1x1 only samples a corner)
+      const luma = async second => {
+        const log = await runFFmpeg(['-hide_banner', '-ss', String(second), '-i', output, '-frames:v', '1', '-vf', 'signalstats,metadata=print:key=lavfi.signalstats.YAVG', '-an', '-f', 'null', '-']).then(r => String(r.stderr), e => String(e.stderr));
+        return Number(/YAVG=([\d.]+)/.exec(log)?.[1]);
       };
-      if (await luma(1.5) < 6 || await luma(7) < 6) throw new Error('A soft fade must not black out the rest of the video');
+      if (!(await luma(1.5) > 25) || !(await luma(7) > 25)) throw new Error('A soft fade must not black out the rest of the video, and the backdrop must be visible');
+      if (!result.thumbnail || result.thumbnail.areaShare > 0.07 || !(await fs.stat(result.thumbnail.path)).size) throw new Error('The editor must hand back a thumbnail whose text stays under 7% of the frame');
       const finalLevels = await runFFmpeg(['-hide_banner', '-i', output, '-af', 'volumedetect', '-vn', '-f', 'null', '-']).then(r => String(r.stderr));
       if (!/max_volume: -[\d.]+ dB/.test(finalLevels) || /max_volume: -0\.0 dB/.test(finalLevels)) throw new Error('The final mix must not clip');
       const gate = await new EditSopService({ getSetting: async () => 'false' }).review({ assets: { finalVideo: { edit: evidence, delivery: { name: deliveryName({ title: 'teste' }) } } } });

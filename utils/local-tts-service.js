@@ -38,7 +38,9 @@ class LocalTTSService {
   }
 
   resolveLanguage(text, requested) {
-    return normalizeLanguage(requested) || normalizeLanguage(process.env.NARRATION_LANGUAGE) || detectLanguage(text);
+    // An explicit request is never swapped for another language: unsupported means no local narration.
+    if (requested) return normalizeLanguage(requested) || String(requested);
+    return normalizeLanguage(process.env.NARRATION_LANGUAGE) || detectLanguage(text);
   }
 
   supports(language) {

@@ -445,6 +445,8 @@ class ProductionManagementAgent {
         scenes, storyboard, narrationPath, narrationSeconds: audio.seconds || null, outputPath,
         dir: path.join(root, 'production', `${id}_edit`),
         assetsDir: path.join(root, 'assets', 'scenes', id),
+        thumbnailPath: path.join(root, 'assets', `${id}_thumbnail.jpg`),
+        title: productionData.script?.title,
         style: storyboard.style,
         endScreen: await setting('edit_end_screen') !== 'false',
         lutPath: await setting('edit_lut_path') || null,
@@ -455,6 +457,16 @@ class ProductionManagementAgent {
           assetPath: asset.path, assetType: 'video', assetOrigin: 'generated', provider: 'procedural',
           model: 'ffmpeg-gradients', status: 'ready'
         });
+      }
+
+      // Without an image provider the designer only leaves a placeholder: use the editor's local thumbnail.
+      const current = productionData.assets.thumbnail;
+      const realThumbnail = current?.path && /\.(png|jpe?g|webp)$/i.test(current.path) && !current.simulated;
+      if (result.thumbnail && !realThumbnail) {
+        productionData.assets.thumbnail = {
+          ...(current || {}), path: result.thumbnail.path, generatedWith: 'ffmpeg frame + headline', simulated: false,
+          text: result.thumbnail.text, textAreaShare: result.thumbnail.areaShare
+        };
       }
 
       // [Data]_[NumeroVideo]_[TemaCurto].mp4 in the "finalizado" folder, as the SOP delivers it.

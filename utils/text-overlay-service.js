@@ -9,7 +9,8 @@ const { Logger } = require('./logger');
 // on a 1080p frame, one line, lower-left. The headline is the only text drawn (60 pt leaves no
 // room for a second line that is still readable on a phone).
 
-const MIN_SHOT_SECONDS = 3;
+const MIN_SHOT_SECONDS = 4; // a text moment needs room to be read
+const MIN_HOOK_SECONDS = 2; // the hook claim appears at 0.3 s, so a short hook still fits it
 const MAX_OVERLAY_SECONDS = 5;
 const LEAD_IN_SECONDS = 1;
 const HOOK_LEAD_IN_SECONDS = 0.3; // the claim must be on screen inside the first seconds
@@ -48,7 +49,7 @@ function buildOverlays(storyboard, scenes = [], videoSeconds = null) {
   }
   return shots.flatMap(shot => {
     const slot = starts.get(shot.label);
-    if (!slot || slot.duration < (shot.narrativeRole === 'hook' ? MIN_SHOT_SECONDS : MIN_SHOT_SECONDS + 1)) return [];
+    if (!slot || slot.duration < (shot.narrativeRole === 'hook' ? MIN_HOOK_SECONDS : MIN_SHOT_SECONDS)) return [];
     const lead = shot.narrativeRole === 'hook' ? HOOK_LEAD_IN_SECONDS : LEAD_IN_SECONDS;
     const start = slot.start + lead;
     const end = start + Math.min(MAX_OVERLAY_SECONDS, slot.duration - lead);
