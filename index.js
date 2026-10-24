@@ -28,6 +28,7 @@ const { AudienceEngagementService } = require('./utils/audience-engagement-servi
 const { GrowthExperimentService } = require('./utils/growth-experiment-service');
 const { AITextService } = require('./utils/ai-text-service');
 const { DiscoverabilityService } = require('./utils/discoverability-service');
+const { ComplianceService } = require('./utils/compliance-service');
 const { version } = require('./package.json');
 const chalk = require('chalk');
 
@@ -52,6 +53,7 @@ class YouTubeAutomationAgent {
     this.engagement = null;
     this.experiments = null;
     this.discoverability = null;
+    this.compliance = null;
     this.setupRequired = false;
   }
 
@@ -69,7 +71,8 @@ class YouTubeAutomationAgent {
         logger: this.logger,
         updateJobStage: (...args) => this.updateJobStage(...args)
       });
-      this.operator = new OperatorService(this.db);
+      this.compliance = new ComplianceService(this.db, { logger: this.logger });
+      this.operator = new OperatorService(this.db, { compliance: this.compliance });
       this.provenance = new ProvenanceService(this.db);
       this.discoverability = new DiscoverabilityService(this.db, { logger: this.logger });
       this.autonomous = new AutonomousChannelOperator(this.db, {
@@ -104,6 +107,7 @@ class YouTubeAutomationAgent {
       // Initialize agents
       this.logger.info('Initializing agents...');
       await this.initializeAgents();
+      this.compliance.setAIService(new AITextService(this.credentials?.credentials || {}));
       this.scenes = this.agents.production?.sceneRepair || new SceneRepairService(
         this.db,
         this.agents.production?.aiVideoGenerator,
@@ -785,6 +789,14 @@ class YouTubeAutomationAgent {
       }
     });
 
+    this.app.get('/api/content/:productionId/compliance', async (req, res) => {
+      const bundle = await this.db.getProductionBundle(req.params.productionId);
+      if (!bundle) return res.status(404).json({ error: 'Content not found' });
+      if (!this.compliance) return res.status(503).json({ error: 'Compliance service is not configured' });
+      const report = await this.compliance.report({ ...bundle, editorData: bundle.editorData });
+      return res.json({ success: true, result: report });
+    });
+
     this.app.post('/api/content/:productionId/approve', protect, async (req, res) => {
       try {
         const result = await this.approveContent(req.params.productionId, req.body || {});
@@ -1273,7 +1285,7 @@ class YouTubeAutomationAgent {
     });
 
     this.app.put('/api/settings', protect, async (req, res) => {
-      const allowed = ['approval_required', 'notification_enabled', 'channel_timezone', 'max_daily_posts', 'content_buffer_days'];
+      const allowed = ['approval_required', 'notification_enabled', 'channel_timezone', 'max_daily_posts', 'content_buffer_days', 'compliance_strict', 'compliance_auto_fix_hook'];
       for (const key of allowed) {
         if (req.body?.[key] !== undefined) await this.db.setSetting(key, String(req.body[key]));
       }
@@ -1522,7 +1534,7 @@ class YouTubeAutomationAgent {
       jobId,
       'script',
       25,
-      () => this.agents.scriptWriter.generateScript(strategy)
+      async () => this.applyScriptCompliance(await this.agents.scriptWriter.generateScript(strategy))
     );
     this.logger.info(`Script generated: ${script.title}`);
 
@@ -1654,6 +1666,8 @@ class YouTubeAutomationAgent {
     }
     if (input.factChecked !== undefined) output.factChecked = input.factChecked === true;
     if (input.rightsConfirmed !== undefined) output.rightsConfirmed = input.rightsConfirmed === true;
+    if (input.originalityConfirmed !== undefined) output.originalityConfirmed = input.originalityConfirmed === true;
+    if (input.audioReviewed !== undefined) output.audioReviewed = input.audioReviewed === true;
     const experiment = output.packagingExperiment;
     if (input.selectedTitleVariant !== undefined) {
       const selected = Number(input.selectedTitleVariant);
@@ -1768,6 +1782,20 @@ class YouTubeAutomationAgent {
     });
   }
 
+  // Pre-recording compliance: replace a generic preamble with a direct hook before the script is checkpointed.
+  async applyScriptCompliance(script) {
+    if (!this.compliance || await this.db.getSetting('compliance_auto_fix_hook') === 'false') return script;
+    try {
+      const result = await this.compliance.fixOpening(script);
+      if (result.fixed) this.logger.info(`Compliance rewrote the opening hook: "${result.after}"`);
+      else if (!result.check.passed) this.logger.warn(`Generic opening kept: ${result.check.message}`);
+      return result.script;
+    } catch (error) {
+      this.logger.warn(`Script compliance skipped: ${error.message}`);
+      return script;
+    }
+  }
+
   async approveContent(productionId, input) {
     const bundle = await this.db.getProductionBundle(productionId);
     if (!bundle) {
@@ -1813,7 +1841,8 @@ class YouTubeAutomationAgent {
       privacyStatus: editorData.privacyStatus || process.env.DEFAULT_PRIVACY_STATUS || 'private',
       provenance: bundle.provenance,
       containsSyntheticMedia: bundle.provenance?.containsSyntheticMedia === true,
-      scenes: bundle.scenes || []
+      scenes: bundle.scenes || [],
+      editorData
     };
     const profile = await this.db.getChannelProfile() || {};
     const quality = await this.operator.runQualityChecks(productionData, profile);

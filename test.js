@@ -50,6 +50,7 @@ class SystemTest {
       { name: 'Evergreen Template Topics', test: () => this.testEvergreenTopics() },
       { name: 'Dark Channel Mining', test: () => this.testChannelMining() },
       { name: 'Niche Validation and Positioning', test: () => this.testNicheIntelligence() },
+      { name: 'Inauthentic Content Compliance Checklist', test: () => this.testComplianceChecklist() },
       { name: 'Walkthrough Module', test: () => this.testWalkthroughModule() },
       { name: 'Logger System', test: () => this.testLogger() },
       { name: 'Directory Structure', test: () => this.testDirectories() },
@@ -2841,6 +2842,83 @@ class SystemTest {
     this.logger.info('Niche intelligence test completed successfully');
   }
 
+  async testComplianceChecklist() {
+    const fs = require('fs').promises;
+    const os = require('os');
+    const { ComplianceService } = require('./utils/compliance-service');
+    const { OperatorService } = require('./utils/operator-service');
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'yaa-compliance-'));
+    const db = new Database();
+    db.dbPath = path.join(directory, 'compliance.db');
+    await db.initialize();
+
+    const script = (hook, body) => ({
+      title: 'Os juros compostos',
+      hook: { text: hook, duration: '0:00-0:05' },
+      fullScript: `TITLE: Os juros compostos\n\n${'═'.repeat(50)}\n\n[0:00-0:05] HOOK\n${hook}\n\n[0:05-0:30] INTRODUCTION\n${body}\n\n[VISUALS: chart]\n`
+    });
+    const genericScript = script('Olá pessoal, hoje vamos falar sobre juros compostos e como eles funcionam.', 'Primeiro entenda o conceito de capital e tempo.');
+    const directScript = script('Mil reais viram quarenta mil em trinta anos, e quase ninguém aplica assim.', 'Primeiro entenda o conceito de capital e tempo.');
+
+    try {
+      const compliance = new ComplianceService(db);
+
+      // Item 03: hook direto
+      if (compliance.evaluateHook(genericScript).passed) throw new Error('A generic greeting must fail the hook check');
+      if (!compliance.evaluateHook(directScript).passed) throw new Error('A direct hook must pass the hook check');
+      if (compliance.evaluateHook(genericScript).opening.includes('HOOK')) throw new Error('Script headings must not count as spoken text');
+
+      // The AI rewrite is only kept when the new opening passes the check
+      compliance.setAIService({ client: {}, generateText: async () => '"Mil reais viram quarenta mil em trinta anos."' });
+      const fixed = await compliance.fixOpening(genericScript);
+      if (!fixed.fixed || !fixed.script.fullScript.includes('Mil reais viram') || fixed.script.fullScript.includes('Olá pessoal')) throw new Error('Generic opening was not rewritten');
+      if (genericScript.hook.text.indexOf('Olá') !== 0) throw new Error('The original script must not be mutated');
+      compliance.setAIService({ client: {}, generateText: async () => 'Olá pessoal, bem-vindos ao canal' });
+      if ((await compliance.fixOpening(genericScript)).fixed) throw new Error('A rewrite that is still generic must be discarded');
+
+      // Item 04 / regra 01: variation against recent videos stored in the database
+      await db.saveProductionData({ id: 'cmp-prev', status: 'processing', assets: {}, timeline: {}, priority: 50, estimatedDuration: '10:00' });
+      await db.saveProductionSnapshot({ id: 'cmp-prev', strategy: {}, script: directScript, thumbnail: { concept: { style: 'clean', colors: { primary: '#fff' } } }, seo: {} });
+      const recent = await compliance.recentVideos('cmp-current');
+      if (recent.length !== 1 || recent[0].script.title !== 'Os juros compostos') throw new Error('Recent productions were not loaded');
+      if ((await compliance.recentVideos('cmp-prev')).length !== 0) throw new Error('The current production must be excluded from the comparison');
+      if (compliance.evaluateVariation(directScript, directScript.title, recent).passed) throw new Error('A repeated script must fail the variation check');
+      const different = script('A moeda que desapareceu do mapa em uma noite.', 'A história começa em um porto esquecido no século dezoito.');
+      if (!compliance.evaluateVariation({ ...different, title: 'Moeda perdida' }, 'Moeda perdida', recent).passed) throw new Error('A different script must pass the variation check');
+
+      // Item 05 / regra 02: natural voice
+      if (compliance.evaluateVoice({ provider: 'simulation', simulated: true }).passed) throw new Error('Simulated TTS must fail the voice check');
+      if (!compliance.evaluateVoice({ provider: 'elevenlabs', status: 'ready' }).passed) throw new Error('A neural voice must pass the voice check');
+
+      // Mandatory trio blocks only in strict mode
+      const production = { id: 'cmp-current', script: genericScript, seo: { title: genericScript.title }, assets: { audio: { provider: 'elevenlabs', status: 'ready' } }, provenance: { status: 'not_required' } };
+      const advisory = await compliance.review(production);
+      if (advisory.some(check => check.blocking)) throw new Error('Compliance must be advisory by default');
+      await db.setSetting('compliance_strict', 'true');
+      const strict = await compliance.review(production);
+      const blocking = strict.filter(check => check.blocking && !check.passed).map(check => check.id).sort();
+      if (blocking.join() !== 'compliance_facts,compliance_hook,compliance_originality') throw new Error(`Strict mode must block only the three mandatory interventions: ${blocking}`);
+      const confirmed = await compliance.review({ ...production, script: directScript, editorData: { originalityConfirmed: true, factChecked: true } });
+      if (confirmed.some(check => check.blocking && !check.passed)) throw new Error('Completed interventions must clear the strict gate');
+      const report = await compliance.report({ ...production, editorData: { factChecked: true } });
+      if (report.mandatoryDone || report.interventions.length !== 3 || report.signals.length !== 5) throw new Error('Report must expose the 3 interventions and 5 warning signals');
+
+      // The operator quality gate picks the checks up and blocks only in strict mode
+      const quality = await new OperatorService(db, { compliance }).runQualityChecks(production, {});
+      if (!quality.blockingFailures.includes('compliance_hook')) throw new Error('Strict compliance failures must reach the quality gate');
+      await db.setSetting('compliance_strict', 'false');
+      const relaxed = await new OperatorService(db, { compliance }).runQualityChecks(production, {});
+      if (relaxed.blockingFailures.some(id => id.startsWith('compliance_')) || !relaxed.checks.some(check => check.id === 'compliance_variation')) {
+        throw new Error('Advisory compliance must be reported without blocking');
+      }
+    } finally {
+      await db.close();
+      await fs.rm(directory, { recursive: true, force: true });
+    }
+
+    this.logger.info('Compliance checklist test completed successfully');
+  }
+
   async testWalkthroughModule() {
     const { SetupWalkthrough, AI_PROVIDER_GUIDE, VIDEO_PROVIDER_GUIDE } = require('./walkthrough');
     const { PROVIDERS, GEMINI_MODELS, GEMINI_DEFAULT_MODEL } = require('./utils/ai-text-service');
@@ -2974,6 +3052,7 @@ class SystemTest {
       './agents/publishing-scheduling-agent',
       './agents/analytics-optimization-agent',
       './agents/channel-mining-agent',
+      './utils/compliance-service',
       './utils/discoverability-service',
       './utils/discoverability-adapters/darkzseo'
     ];

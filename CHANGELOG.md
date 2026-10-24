@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Added a dark channel mining agent (`npm run agent:mining`, `POST /api/mining/run`) that reproduces the manual research routine (video, 20+ minutes, this week) and rates each channel's multilingual opportunity
+- Added niche and micro-niche validation with RPM per niche, a multilingual outlier plan per language gap, and positioning and differentiation analysis (`POST /api/mining/strategy`)
+- Added the Modelo 2 compliance checklist (Fórmula YouTube, M05 A02) to the quality gate: direct-hook, originality, fact, variation, natural-voice, audio-touch, visual-template and upload-volume checks, plus `GET /api/content/:productionId/compliance`
+- Generic video openings are rewritten into a direct hook right after the script stage (`compliance_auto_fix_hook`); the three mandatory interventions only block approval when `compliance_strict` is enabled
 - Bundled the DarkzSEO-compatible content audit so the preflight no longer depends on the unpublished 1.4 Python package; external 1.4+ checkouts remain opt-in through `DARKZSEO_PATH`
 - Fixed regenerated narration timing, CTA metadata and template-placeholder speech leaks, configured visual-style propagation, and null manual strategy contexts
 - Added explicit reschedule, publish-now, and delete-schedule controls while keeping generated content when a schedule is removed

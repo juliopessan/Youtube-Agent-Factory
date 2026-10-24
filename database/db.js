@@ -697,6 +697,8 @@ class Database {
       ['automation_paused', 'false', 'Pause generation and publishing automation'],
       ['channel_timezone', 'America/Chicago', 'Timezone used to present channel schedules'],
       ['max_daily_posts', '1', 'Maximum posts per day'],
+      ['compliance_strict', 'false', 'Block approval until the three mandatory compliance interventions are done'],
+      ['compliance_auto_fix_hook', 'true', 'Rewrite generic video openings into a direct hook'],
       ['content_buffer_days', '3', 'Days of content to keep in buffer'],
       ['video_provider', 'slideshow', 'Video provider: slideshow, auto, seedance, minimax_h3, google_omni, kling, or wan'],
       ['video_provider_order', 'seedance,minimax_h3,google_omni,kling,wan,slideshow', 'Provider priority used by automatic routing'],
@@ -2781,6 +2783,23 @@ class Database {
   async listChannelMiningResults(limit = 100) {
     const rows = await this.getAllRows('SELECT payload, mined_at FROM channel_mining_results ORDER BY mined_at DESC LIMIT ?', [limit]);
     return rows.map(row => ({ ...JSON.parse(row.payload), minedAt: row.mined_at }));
+  }
+
+  // Latest productions (script, thumbnail) used to measure variation between videos.
+  async getRecentScriptSnapshots(excludeId = null, limit = 5) {
+    const rows = await this.getAllRows(
+      `SELECT p.id, p.created_at, ps.script, ps.thumbnail
+       FROM productions p JOIN production_snapshots ps ON ps.production_id = p.id
+       WHERE p.id != ?
+       ORDER BY p.created_at DESC LIMIT ?`,
+      [excludeId || '', limit]
+    );
+    return rows.map(row => ({
+      id: row.id,
+      createdAt: row.created_at,
+      script: JSON.parse(row.script || '{}'),
+      thumbnail: JSON.parse(row.thumbnail || '{}')
+    }));
   }
 
   async getKeywordHistory() {

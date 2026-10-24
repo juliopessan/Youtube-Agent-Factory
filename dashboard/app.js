@@ -1030,6 +1030,8 @@ async function openContent(productionId) {
           <div class="settings-row">
             <label class="toggle"><input name="factChecked" type="checkbox" ${data.factChecked ? 'checked' : ''}><span></span> Facts and claims reviewed</label>
             <label class="toggle"><input name="rightsConfirmed" type="checkbox" ${data.rightsConfirmed ? 'checked' : ''}><span></span> Media rights confirmed</label>
+            <label class="toggle"><input name="originalityConfirmed" type="checkbox" ${data.originalityConfirmed ? 'checked' : ''}><span></span> Script is original (no direct copy)</label>
+            <label class="toggle"><input name="audioReviewed" type="checkbox" ${data.audioReviewed ? 'checked' : ''}><span></span> Audio touched up (pauses and breaths)</label>
           </div>
           ${item.schedule && !['published', 'uploading', 'uploaded', 'reconciliation_required'].includes(item.schedule.status) ? `<div class="form-actions"><button type="button" class="button secondary" data-reschedule-content="${escapeHTML(item.id)}">Reschedule</button><button type="button" class="button primary" data-publish-now-content="${escapeHTML(item.id)}">Publish now</button><button type="button" class="button danger" data-delete-schedule="${escapeHTML(item.id)}">Delete schedule</button></div>` : ''}
           ${canReview ? `<div class="form-actions"><button type="button" class="button primary" data-approve-content="${escapeHTML(item.id)}">Approve & schedule</button><button type="button" class="button secondary" data-save-content="${escapeHTML(item.id)}">Save draft</button><button type="button" class="button danger" data-reject-content="${escapeHTML(item.id)}">Reject</button><button type="button" class="button ghost" data-retry-content="${escapeHTML(item.id)}">Regenerate</button></div>` : `<a class="button secondary" href="${escapeHTML(item.schedule?.youtube_url || '#')}" target="_blank" rel="noopener">Open on YouTube</a>`}
@@ -1063,7 +1065,9 @@ function contentFormData() {
     selectedTitleVariant: values.selectedTitleVariant,
     selectedThumbnailVariant: values.selectedThumbnailVariant,
     factChecked: form.elements.factChecked?.checked || false,
-    rightsConfirmed: form.elements.rightsConfirmed?.checked || false
+    rightsConfirmed: form.elements.rightsConfirmed?.checked || false,
+    originalityConfirmed: form.elements.originalityConfirmed?.checked || false,
+    audioReviewed: form.elements.audioReviewed?.checked || false
   };
 }
 

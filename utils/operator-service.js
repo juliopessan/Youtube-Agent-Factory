@@ -3,8 +3,9 @@ const axios = require('axios');
 const { Logger } = require('./logger');
 
 class OperatorService {
-  constructor(db) {
+  constructor(db, options = {}) {
     this.db = db;
+    this.compliance = options.compliance || null;
     this.logger = new Logger('OperatorService');
   }
 
@@ -131,6 +132,14 @@ class OperatorService {
         unlicensedUploads.length === 0
           ? 'Replacement scene assets have rights confirmation'
           : `${unlicensedUploads.length} uploaded scene asset${unlicensedUploads.length === 1 ? '' : 's'} lack rights confirmation`));
+    }
+
+    if (this.compliance) {
+      try {
+        checks.push(...await this.compliance.review(production));
+      } catch (error) {
+        this.logger.warn(`Compliance review skipped: ${error.message}`);
+      }
     }
 
     const blockingFailures = checks.filter(check => check.blocking && !check.passed);
