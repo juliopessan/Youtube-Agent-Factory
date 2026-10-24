@@ -52,6 +52,8 @@ class SystemTest {
       { name: 'Niche Validation and Positioning', test: () => this.testNicheIntelligence() },
       { name: 'Inauthentic Content Compliance Checklist', test: () => this.testComplianceChecklist() },
       { name: 'YouTube Video Director Storyboard', test: () => this.testVideoDirector() },
+      { name: 'Best Moments Shorts Clipping', test: () => this.testBestMomentsClipping() },
+      { name: 'Storyboard Text Overlays', test: () => this.testTextOverlays() },
       { name: 'Walkthrough Module', test: () => this.testWalkthroughModule() },
       { name: 'Logger System', test: () => this.testLogger() },
       { name: 'Directory Structure', test: () => this.testDirectories() },
@@ -1554,7 +1556,8 @@ class SystemTest {
       const service = new ShortsRepurposingService(db, publishing, {
         dataRoot: path.join(directory, 'shorts'), width: 360, height: 640, logger: this.logger
       });
-      const proposed = await service.propose(productionId, { count: 3 });
+      // This fixture video is 4 seconds long: the evenly spaced mode keeps exercising the legacy cut.
+      const proposed = await service.propose(productionId, { count: 3, mode: 'even' });
       if (proposed.length !== 3 || proposed.some(clip => !clip.sourceSceneIds.length || clip.status !== 'proposed')) {
         throw new Error('Short drafts did not preserve source-scene identity');
       }
@@ -3009,6 +3012,140 @@ class SystemTest {
     this.logger.info('Video director test completed successfully');
   }
 
+  async testBestMomentsClipping() {
+    const fs = require('fs').promises;
+    const os = require('os');
+    const { runFFmpeg } = require('./utils/ffmpeg');
+    const { rankMoments } = require('./utils/best-moments');
+    const { ShortsRepurposingService } = require('./utils/shorts-repurposing-service');
+
+    const bland = 'Este trecho descreve o processo de forma geral. Ele segue explicando os detalhes técnicos com calma. A explicação continua sem grandes novidades por aqui.';
+    const strong = 'Em 1453 ninguém acreditava que a cidade cairia? Mas o cerco durou 53 dias e mudou tudo. Por isso o resultado marcou a história.';
+    const scenes = Array.from({ length: 16 }, (_, index) => ({
+      id: `scene-${index}`, label: index === 0 ? 'Hook 1' : index === 15 ? 'CTA 16' : `Meat ${index + 1}`,
+      scriptText: index === 5 ? strong : bland, prompt: 'p', duration: 20,
+      assetType: 'video', assetPath: 'fake.mp4', audioPath: null, status: 'ready', narrationStatus: 'current', rightsConfirmed: true
+    }));
+    const storyboard = { shots: scenes.map((scene, index) => ({ label: scene.label, narrativeRole: index === 0 ? 'hook' : index === 15 ? 'cta' : 'meat' })) };
+
+    // Pure ranking: the strongest passage wins, windows respect the Shorts length and never overlap
+    const { moments } = rankMoments(scenes, { storyboard, limit: 8 });
+    if (!moments[0].sceneIds.includes('scene-5') || !moments[0].signals.includes('abertura com curiosidade ou dado')) throw new Error(`The passage with facts, question and twist must rank first: ${JSON.stringify(moments[0].signals)}`);
+    if (moments.some(moment => moment.duration < 20 || moment.duration > 58)) throw new Error('Moments must be between 20 and 58 seconds');
+    const byStart = [...moments].sort((a, b) => a.startSeconds - b.startSeconds);
+    if (byStart.some((moment, index) => index && moment.startSeconds < byStart[index - 1].startSeconds + byStart[index - 1].duration)) throw new Error('Moments must not overlap');
+    if (moments.some(moment => moment.sceneIds.includes('scene-15'))) throw new Error('A window holding the long video CTA must be penalized out');
+    if (!moments.some(moment => moment.firstRole === 'hook' && moment.signals.includes('abre no hook do vídeo'))) throw new Error('The hook must be a candidate with its role bonus');
+
+    // Real audience evidence outranks the heuristics
+    const retention = new Map([['scene-9', 0.95], ['scene-5', 0.2]]);
+    const informed = rankMoments(scenes, { storyboard, retention, limit: 8 }).moments;
+    if (!informed[0].sceneIds.includes('scene-9') || !informed[0].signals.some(signal => signal.startsWith('retenção real'))) throw new Error('Scenes with real high retention must win');
+
+    // Service: persisted best-moment drafts, AI re-ranking, evenly spaced fallback and validation
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'yaa-moments-'));
+    const db = new Database();
+    db.dbPath = path.join(directory, 'moments.db');
+    await db.initialize();
+    try {
+      const productionId = 'prod-moments';
+      await db.saveProductionData({ id: productionId, status: 'ready', assets: { finalVideo: { path: 'fake.mp4', simulated: false } }, timeline: {}, priority: 50, estimatedDuration: '5:20' });
+      await db.saveProductionSnapshot({ id: productionId, strategy: {}, script: { title: 'A queda', storyboard }, thumbnail: {}, seo: { title: 'A queda' } });
+      await db.replaceProductionScenes(productionId, scenes);
+      const service = new ShortsRepurposingService(db, {}, { dataRoot: path.join(directory, 'shorts'), logger: this.logger });
+
+      const drafts = await service.propose(productionId, { count: 3, replace: true });
+      if (drafts.length !== 3 || drafts.some(clip => clip.selectionMode !== 'best_moments' || !clip.narrationText || typeof clip.momentScore !== 'number' || !clip.momentSignals.length)) throw new Error('Best-moment drafts must persist their score, signals and exact narration');
+      if (!drafts[0].sourceSceneIds.includes('scene-5') || drafts[0].momentScore < drafts[2].momentScore) throw new Error('Drafts must be ordered best first');
+
+      const even = await service.propose(productionId, { count: 3, mode: 'even', replace: true });
+      if (even.some(clip => clip.selectionMode !== 'even' || clip.narrationText)) throw new Error('The evenly spaced mode must keep the legacy cut');
+      let rejected = false;
+      try { await service.propose(productionId, { mode: 'random', replace: true }); } catch (error) { rejected = error.status === 400; }
+      if (!rejected) throw new Error('An unknown selection mode must be rejected');
+
+      service.setAIService({ client: {}, generateText: async () => JSON.stringify({ moments: [{ id: 0, score: 0, title: 'ignored' }, { id: 1, score: 10, title: 'Título escolhido pela IA' }] }) });
+      const ranked = await service.propose(productionId, { count: 2, replace: true });
+      if (ranked[0].title !== 'Título escolhido pela IA' || ranked[0].momentScore < 6) throw new Error('AI scores and titles must re-rank the moments');
+      service.setAIService({ client: {}, generateText: async () => 'not json' });
+      if ((await service.propose(productionId, { count: 2, replace: true })).length !== 2) throw new Error('A broken AI answer must keep the heuristic ranking');
+
+      // Real render: the captions follow the exact sentences of the chosen moment
+      const sourceVideo = path.join(directory, 'source.mp4');
+      await runFFmpeg(['-y', '-f', 'lavfi', '-i', 'color=c=#203a5f:s=640x360:r=24:d=12', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=12', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', sourceVideo]);
+      const renderId = 'prod-moments-render';
+      await db.saveProductionData({ id: renderId, status: 'ready', assets: { finalVideo: { path: sourceVideo, simulated: false } }, timeline: {}, priority: 50, estimatedDuration: '0:12' });
+      await db.saveProductionSnapshot({ id: renderId, strategy: {}, script: { title: 'Curto' }, thumbnail: {}, seo: { title: 'Curto' } });
+      await db.replaceProductionScenes(renderId, Array.from({ length: 6 }, (_, index) => ({
+        id: `r-${index}`, label: `Scene ${index}`, scriptText: `Primeira frase ${index} do trecho. Segunda frase ${index} fecha a ideia.`, prompt: 'p', duration: 2,
+        assetType: 'video', assetPath: sourceVideo, audioPath: null, status: 'ready', narrationStatus: 'current', rightsConfirmed: true
+      })));
+      const [clip] = await service.propose(renderId, { count: 1, minSeconds: 5, maxSeconds: 10, useAI: false });
+      if (clip.duration < 5 || clip.duration > 10) throw new Error(`The window must honor the requested length: ${clip.duration}`);
+      const rendered = await service.render(renderId, clip.id);
+      const captions = await fs.readFile(rendered.captionsPath, 'utf8');
+      if (rendered.status !== 'rendered' || !captions.includes('frase')) throw new Error('The Short must render with captions from its own sentences');
+      await runFFmpeg(['-v', 'error', '-i', rendered.outputPath, '-f', 'null', '-']);
+    } finally {
+      await db.close();
+      await fs.rm(directory, { recursive: true, force: true });
+    }
+    this.logger.info('Best moments clipping test completed successfully');
+  }
+
+  async testTextOverlays() {
+    const fs = require('fs').promises;
+    const os = require('os');
+    const crypto = require('crypto');
+    const { runFFmpeg } = require('./utils/ffmpeg');
+    const { TextOverlayService, buildOverlays, buildASS } = require('./utils/text-overlay-service');
+
+    const scenes = [
+      { label: 'Hook 1', duration: 10 }, { label: 'Meat 2', duration: 40 }, { label: 'Meat 3', duration: 1 }, { label: 'CTA 4', duration: 9 }
+    ];
+    const storyboard = { aspectRatio: '16:9', shots: [
+      { label: 'Hook 1', showTextOverlay: true, headline: 'NÃO DEVE APARECER', subheadline: '' },
+      { label: 'Meat 2', showTextOverlay: true, headline: '1453 {x}\\n', subheadline: 'O cerco' },
+      { label: 'Meat 3', showTextOverlay: true, headline: '53 DIAS', subheadline: 'curto demais' },
+      { label: 'CTA 4', showTextOverlay: false, headline: '', subheadline: '' }
+    ] };
+
+    // Timing: rescaled to the real video length; very short shots are skipped; the text never leaks ASS code
+    const overlays = buildOverlays(storyboard, scenes, 120);
+    const meat = overlays.find(item => item.headline.startsWith('1453'));
+    if (!meat || Math.abs(meat.start - (10 * 2 + 1)) > 0.01 || meat.end - meat.start > 5) throw new Error(`Overlay timing was not rescaled to the real video: ${JSON.stringify(meat)}`);
+    if (overlays.some(item => item.headline === '53 DIAS')) throw new Error('Shots shorter than four seconds must not carry an overlay');
+    const ass = buildASS(overlays);
+    if (!ass.includes('Dialogue: 0,0:00:') || ass.includes('{x}') || !ass.includes('1453  N'.slice(0, 4)) || !ass.includes('PlayResX: 1920') || !buildASS(overlays, { vertical: true }).includes('PlayResY: 1920')) throw new Error('The ASS file is malformed or leaks override codes');
+
+    // Failure keeps the original video untouched
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'yaa-overlay-'));
+    try {
+      const video = path.join(directory, 'video.mp4');
+      await runFFmpeg(['-y', '-f', 'lavfi', '-i', 'color=c=#203a5f:s=640x360:r=24:d=8', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=8', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', video]);
+      const original = await fs.readFile(video);
+      const failing = await new TextOverlayService({ runFFmpeg: async () => { throw new Error('boom'); }, logger: { info() {}, warn() {} } })
+        .apply(video, { shots: [{ label: 'A', showTextOverlay: true, headline: 'FATO', subheadline: 'x' }] }, [{ label: 'A', duration: 8 }]);
+      if (failing.applied !== 0 || !original.equals(await fs.readFile(video))) throw new Error('A failed overlay must leave the video untouched');
+
+      // Real render: the text is burned into the frames and the audio survives
+      const frame = async (file, name) => {
+        const target = path.join(directory, name);
+        await runFFmpeg(['-y', '-ss', '3', '-i', file, '-frames:v', '1', target]);
+        return crypto.createHash('sha1').update(await fs.readFile(target)).digest('hex');
+      };
+      const before = await frame(video, 'before.png');
+      const result = await new TextOverlayService({ logger: { info() {}, warn() {} } })
+        .apply(video, { shots: [{ label: 'A', showTextOverlay: true, headline: 'ANO 1453', subheadline: 'Queda da cidade' }] }, [{ label: 'A', duration: 8 }]);
+      if (result.applied !== 1) throw new Error(`The overlay was not rendered: ${JSON.stringify(result)}`);
+      if (before === await frame(video, 'after.png')) throw new Error('The overlay text is not visible in the rendered frames');
+      await runFFmpeg(['-v', 'error', '-i', video, '-map', '0:a:0', '-f', 'null', '-']);
+    } finally {
+      await fs.rm(directory, { recursive: true, force: true });
+    }
+    this.logger.info('Text overlays test completed successfully');
+  }
+
   async testWalkthroughModule() {
     const { SetupWalkthrough, AI_PROVIDER_GUIDE, VIDEO_PROVIDER_GUIDE } = require('./walkthrough');
     const { PROVIDERS, GEMINI_MODELS, GEMINI_DEFAULT_MODEL } = require('./utils/ai-text-service');
@@ -3144,6 +3281,8 @@ class SystemTest {
       './agents/channel-mining-agent',
       './utils/compliance-service',
       './utils/video-director-service',
+      './utils/best-moments',
+      './utils/text-overlay-service',
       './utils/discoverability-service',
       './utils/discoverability-adapters/darkzseo'
     ];

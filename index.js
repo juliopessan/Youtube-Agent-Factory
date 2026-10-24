@@ -118,7 +118,7 @@ class YouTubeAutomationAgent {
         this.agents.production?.aiVideoGenerator,
         { logger: this.logger }
       );
-      this.shorts = new ShortsRepurposingService(this.db, this.agents.publishing, { logger: this.logger });
+      this.shorts = new ShortsRepurposingService(this.db, this.agents.publishing, { logger: this.logger, aiTextService: directorAI });
       this.engagement = new AudienceEngagementService(
         this.db,
         this.credentials,
@@ -1297,7 +1297,7 @@ class YouTubeAutomationAgent {
     });
 
     this.app.put('/api/settings', protect, async (req, res) => {
-      const allowed = ['approval_required', 'notification_enabled', 'channel_timezone', 'max_daily_posts', 'content_buffer_days', 'compliance_strict', 'compliance_auto_fix_hook', 'director_enabled', 'director_ai_enrich'];
+      const allowed = ['approval_required', 'notification_enabled', 'channel_timezone', 'max_daily_posts', 'content_buffer_days', 'compliance_strict', 'compliance_auto_fix_hook', 'director_enabled', 'director_ai_enrich', 'director_render_overlays', 'shorts_ai_rank'];
       for (const key of allowed) {
         if (req.body?.[key] !== undefined) await this.db.setSetting(key, String(req.body[key]));
       }
@@ -1309,6 +1309,16 @@ class YouTubeAutomationAgent {
       if (req.body?.director_voice_tone !== undefined) {
         if (!VOICE_TONES[req.body.director_voice_tone]) return res.status(400).json({ error: 'Unsupported director voice tone' });
         await this.db.setSetting('director_voice_tone', req.body.director_voice_tone);
+      }
+      if (req.body?.shorts_selection_mode !== undefined) {
+        if (!['best_moments', 'even'].includes(req.body.shorts_selection_mode)) return res.status(400).json({ error: 'Shorts selection mode must be best_moments or even' });
+        await this.db.setSetting('shorts_selection_mode', req.body.shorts_selection_mode);
+      }
+      for (const key of ['shorts_min_seconds', 'shorts_max_seconds']) {
+        if (req.body?.[key] === undefined) continue;
+        const seconds = Number(req.body[key]);
+        if (!Number.isFinite(seconds) || seconds < 5 || seconds > 180) return res.status(400).json({ error: `${key} must be between 5 and 180 seconds` });
+        await this.db.setSetting(key, String(Math.round(seconds)));
       }
       const provider = req.body?.video_provider;
       if (provider !== undefined) {

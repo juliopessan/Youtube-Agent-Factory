@@ -953,7 +953,10 @@ function renderShortsStudio(item) {
   return `<section class="shorts-studio">
     <div class="panel-heading shorts-heading">
       <div><p class="eyebrow">SHORTS REPURPOSING STUDIO</p><h3>Turn one production into vertical reach</h3><p>Create local 9:16 excerpts with mobile captions. Drafts inherit the source production's evidence and still require separate approval.</p></div>
-      <button type="button" class="button secondary small" data-propose-shorts="${escapeHTML(item.id)}">${clips.length ? 'Refresh drafts' : 'Create 3 Short drafts'}</button>
+      <div class="short-actions">
+        <select data-shorts-mode aria-label="How to cut the Shorts"><option value="best_moments">Best moments (scored)</option><option value="even">Evenly spaced</option></select>
+        <button type="button" class="button secondary small" data-propose-shorts="${escapeHTML(item.id)}">${clips.length ? 'Refresh drafts' : 'Create 3 Short drafts'}</button>
+      </div>
     </div>
     <div class="shorts-evidence ${parentApproved ? 'ready' : ''}">
       <span>${parentApproved ? '✓ Source production approved' : 'Source approval required before scheduling'}</span>
@@ -968,7 +971,7 @@ function renderShortsStudio(item) {
           ? `<video controls preload="metadata"><source src="${escapeHTML(clip.assetUrls.video)}" type="video/mp4"></video>`
           : `<div class="short-placeholder"><strong>9:16</strong><span>${escapeHTML(label(clip.layout))} layout</span></div>`}</div>
         <div class="short-editor">
-          <div class="scene-status-row">${statusChip(clip.status)}<span>${Number(clip.duration || 0).toFixed(0)}s</span><span>${escapeHTML((clip.sourceSceneLabels || []).join(' + '))}</span></div>
+          <div class="scene-status-row">${statusChip(clip.status)}<span>${Number(clip.duration || 0).toFixed(0)}s</span>${clip.momentScore != null ? `<span title="${escapeHTML((clip.momentSignals || []).join('; '))}">Score ${escapeHTML(String(clip.momentScore))}/10</span>` : ''}<span>${escapeHTML((clip.sourceSceneLabels || []).join(' + '))}</span></div>
           <label><span>Short title</span><input data-short-field="title" maxlength="100" value="${escapeHTML(clip.title)}" ${locked ? 'disabled' : ''}></label>
           <label><span>Description and parent-video CTA</span><textarea data-short-field="description" rows="3" maxlength="5000" ${locked ? 'disabled' : ''}>${escapeHTML(clip.description)}</textarea></label>
           <label><span>Tags</span><input data-short-field="tags" value="${escapeHTML((clip.tags || []).join(', '))}" ${locked ? 'disabled' : ''}></label>
@@ -1337,9 +1340,9 @@ document.addEventListener('click', async event => {
     if (replacing && !confirm('Replace the current editable Short drafts? Rendered draft files will remain on disk but their manifest will be replaced.')) return;
     try {
       await api(`/api/content/${encodeURIComponent(productionId)}/shorts/propose`, {
-        method: 'POST', body: JSON.stringify({ count: 3, replace: replacing })
+        method: 'POST', body: JSON.stringify({ count: 3, replace: replacing, mode: document.querySelector('[data-shorts-mode]')?.value || 'best_moments' })
       });
-      await refreshContentDialog(productionId, 'Three local Short drafts created from the current scene timeline.');
+      await refreshContentDialog(productionId, 'Three local Short drafts created from the video\'s strongest moments.');
     } catch (error) {
       showToast(error.message, 'error');
     }

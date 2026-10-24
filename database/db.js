@@ -667,13 +667,19 @@ class Database {
     await this.ensureColumns('discoverability_audits', {
       error_code: 'TEXT'
     });
+    await this.ensureColumns('shorts_clips', {
+      narration_text: 'TEXT',
+      moment_score: 'REAL',
+      moment_signals: "TEXT NOT NULL DEFAULT '[]'",
+      selection_mode: "TEXT DEFAULT 'even'"
+    });
 
     // Insert default settings
     await this.insertDefaultSettings();
   }
 
   async ensureColumns(tableName, columns) {
-    const allowedTables = new Set(['production_scenes', 'channel_strategies', 'discoverability_audits']);
+    const allowedTables = new Set(['production_scenes', 'channel_strategies', 'discoverability_audits', 'shorts_clips']);
     if (!allowedTables.has(tableName)) throw new Error(`Unsupported migration table: ${tableName}`);
     const existing = new Set((await this.getAllRows(`PRAGMA table_info(${tableName})`)).map(column => column.name));
     for (const [columnName, definition] of Object.entries(columns)) {
@@ -697,6 +703,11 @@ class Database {
       ['automation_paused', 'false', 'Pause generation and publishing automation'],
       ['channel_timezone', 'America/Chicago', 'Timezone used to present channel schedules'],
       ['max_daily_posts', '1', 'Maximum posts per day'],
+      ['shorts_selection_mode', 'best_moments', 'How Shorts are cut: best_moments (scored) or even (evenly spaced)'],
+      ['shorts_min_seconds', '20', 'Shortest Short window in seconds'],
+      ['shorts_max_seconds', '58', 'Longest Short window in seconds'],
+      ['shorts_ai_rank', 'true', 'Let the AI re-rank and title the best moments'],
+      ['director_render_overlays', 'true', 'Burn the storyboard headline and subheadline into the final video'],
       ['director_enabled', 'true', 'Plan every script as a Hook / Re-hook / Meat / CTA storyboard'],
       ['director_ai_enrich', 'true', 'Let the AI write shot-level visual ideas and the recurring cast'],
       ['director_visual_style', 'auto', 'Visual style: auto (rotates by niche), cinematic, realistic, 3d_animation, anime_manga, retro_vintage or noir'],
@@ -1319,15 +1330,17 @@ class Database {
           id, production_id, position, title, description, tags, source_scene_ids,
           start_seconds, duration, layout, rationale, status, output_path, captions_path,
           publish_time, privacy_status, inherited_evidence, rendered_at, approved_at,
-          schedule_id, youtube_id, youtube_url, error
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          schedule_id, youtube_id, youtube_url, error, narration_text, moment_score, moment_signals, selection_mode
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           id, productionId, position, clip.title, clip.description || '', JSON.stringify(clip.tags || []),
           JSON.stringify(clip.sourceSceneIds || []), Number(clip.startSeconds || 0), Number(clip.duration || 30),
           clip.layout || 'blur', clip.rationale || null, clip.status || 'proposed', clip.outputPath || null,
           clip.captionsPath || null, clip.publishTime || null, clip.privacyStatus || 'private',
           JSON.stringify(clip.inheritedEvidence || {}), clip.renderedAt || null, clip.approvedAt || null,
-          clip.scheduleId || null, clip.youtubeId || null, clip.youtubeUrl || null, clip.error || null
+          clip.scheduleId || null, clip.youtubeId || null, clip.youtubeUrl || null, clip.error || null,
+          clip.narrationText || null, clip.momentScore ?? null, JSON.stringify(clip.momentSignals || []),
+          clip.selectionMode || 'even'
         ]
       );
     }
@@ -1355,7 +1368,8 @@ class Database {
         title = ?, description = ?, tags = ?, source_scene_ids = ?, start_seconds = ?,
         duration = ?, layout = ?, rationale = ?, status = ?, output_path = ?, captions_path = ?,
         publish_time = ?, privacy_status = ?, inherited_evidence = ?, rendered_at = ?, approved_at = ?,
-        schedule_id = ?, youtube_id = ?, youtube_url = ?, error = ?, updated_at = datetime('now')
+        schedule_id = ?, youtube_id = ?, youtube_url = ?, error = ?, narration_text = ?, moment_score = ?,
+        moment_signals = ?, selection_mode = ?, updated_at = datetime('now')
        WHERE id = ?`,
       [
         next.title, next.description || '', JSON.stringify(next.tags || []), JSON.stringify(next.sourceSceneIds || []),
@@ -1363,7 +1377,8 @@ class Database {
         next.status || 'proposed', next.outputPath || null, next.captionsPath || null, next.publishTime || null,
         next.privacyStatus || 'private', JSON.stringify(next.inheritedEvidence || {}), next.renderedAt || null,
         next.approvedAt || null, next.scheduleId || null, next.youtubeId || null, next.youtubeUrl || null,
-        next.error || null, id
+        next.error || null, next.narrationText || null, next.momentScore ?? null,
+        JSON.stringify(next.momentSignals || []), next.selectionMode || 'even', id
       ]
     );
     return this.getShortClip(id);
@@ -1388,7 +1403,11 @@ class Database {
       approvedAt: row.approved_at || null,
       scheduleId: row.schedule_id || null,
       youtubeId: row.youtube_id || null,
-      youtubeUrl: row.youtube_url || null
+      youtubeUrl: row.youtube_url || null,
+      narrationText: row.narration_text || null,
+      momentScore: row.moment_score ?? null,
+      momentSignals: JSON.parse(row.moment_signals || '[]'),
+      selectionMode: row.selection_mode || 'even'
     };
   }
 

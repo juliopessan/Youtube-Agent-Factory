@@ -4,6 +4,7 @@ const path = require('path');
 const sharp = require('sharp');
 const { getMediaDuration, runFFmpeg } = require('./ffmpeg');
 const { ProvenanceService } = require('./provenance-service');
+const { TextOverlayService } = require('./text-overlay-service');
 
 const VIDEO_EXTENSIONS = new Set(['.mp4']);
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp']);
@@ -134,6 +135,7 @@ class SceneRepairService {
     this.logger = options.logger || { info() {}, warn() {}, error() {} };
     this.dataRoot = options.dataRoot || path.join(__dirname, '..', 'data');
     this.getMediaDuration = options.getMediaDuration || getMediaDuration;
+    this.textOverlays = options.textOverlays || new TextOverlayService({ logger: this.logger });
   }
 
   async ensureManifest(bundle) {
@@ -570,6 +572,10 @@ class SceneRepairService {
     const allIntentionalSilence = scenes.every(scene => scene.narrationStatus === 'intentional_silence');
     await this.videoGenerator.addAudioToVideo(visualPath, audioPath, finalPath, { allowSilent: allIntentionalSilence });
     await fs.unlink(visualPath).catch(() => {});
+    // A rebuilt video loses its burned-in text: render the storyboard overlays again on the new timeline.
+    if (bundle.script?.storyboard && await this.db.getSetting?.('director_render_overlays') !== 'false') {
+      await this.textOverlays.apply(finalPath, bundle.script.storyboard, scenes, { vertical: bundle.script.storyboard.aspectRatio === '9:16' });
+    }
     await fs.writeFile(captionsPath, this.buildSRT(scenes));
     const stats = await fs.stat(finalPath);
     const previousPath = bundle.assets?.finalVideo?.path || null;

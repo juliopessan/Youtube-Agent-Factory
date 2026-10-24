@@ -3,6 +3,7 @@ const fs = require('fs').promises;
 const { Logger } = require('../utils/logger');
 const { AIVideoGenerator } = require('../utils/ai-video-generator');
 const { SceneRepairService } = require('../utils/scene-repair-service');
+const { TextOverlayService } = require('../utils/text-overlay-service');
 
 class ProductionManagementAgent {
   constructor(db, credentials) {
@@ -13,6 +14,7 @@ class ProductionManagementAgent {
     this.assets = new Map();
     this.aiVideoGenerator = new AIVideoGenerator(credentials, { db });
     this.sceneRepair = new SceneRepairService(db, this.aiVideoGenerator, { logger: this.logger });
+    this.textOverlays = new TextOverlayService({ logger: this.logger });
   }
 
   async initialize() {
@@ -105,6 +107,9 @@ class ProductionManagementAgent {
 
       // Persist a scene-addressable production manifest for selective review and repair.
       await this.sceneRepair.initializeProduction(productionData, this.aiVideoGenerator.lastVideoResult || {});
+
+      // Burn the storyboard's headline/subheadline into the final video (never blocks production).
+      await this.applyTextOverlays(productionData);
 
       // Mark as ready — or simulated, when no real video could be produced
       const simulated = Boolean(productionData.assets.finalVideo?.simulated);
@@ -415,6 +420,20 @@ class ProductionManagementAgent {
     });
     
     return elements;
+  }
+
+  async applyTextOverlays(productionData) {
+    try {
+      const video = productionData.assets?.finalVideo;
+      const storyboard = productionData.script?.storyboard;
+      if (!storyboard || !video?.path || video.simulated) return;
+      if (this.db?.getSetting && await this.db.getSetting('director_render_overlays') === 'false') return;
+      const scenes = await this.db.listProductionScenes(productionData.id);
+      const result = await this.textOverlays.apply(video.path, storyboard, scenes, { vertical: storyboard.aspectRatio === '9:16' });
+      if (result.applied) video.overlays = { count: result.applied, renderedAt: new Date().toISOString() };
+    } catch (error) {
+      this.logger.warn(`Text overlays skipped: ${error.message}`);
+    }
   }
 
   async generateAudioNarration(productionData) {

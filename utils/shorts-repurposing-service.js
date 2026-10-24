@@ -2,7 +2,9 @@ const fs = require('fs').promises;
 const path = require('path');
 const { runFFmpeg } = require('./ffmpeg');
 const { Logger } = require('./logger');
+const { rankMoments } = require('./best-moments');
 
+const SELECTION_MODES = new Set(['best_moments', 'even']);
 const LAYOUTS = new Set(['blur', 'crop', 'stacked']);
 
 function clamp(value, minimum, maximum) {
@@ -37,6 +39,91 @@ class ShortsRepurposingService {
     this.width = Number(options.width || 1080);
     this.height = Number(options.height || 1920);
     this.runFFmpeg = options.runFFmpeg || runFFmpeg;
+    this.aiTextService = options.aiTextService || null;
+  }
+
+  setAIService(aiTextService) {
+    this.aiTextService = aiTextService;
+  }
+
+  hasAI() {
+    return Boolean(this.aiTextService?.client || this.aiTextService?.gemini);
+  }
+
+  async setting(key) {
+    return this.db.getSetting ? this.db.getSetting(key) : null;
+  }
+
+  async selectionMode(input) {
+    const mode = input.mode ?? await this.setting('shorts_selection_mode') ?? 'best_moments';
+    if (!SELECTION_MODES.has(mode)) {
+      const error = new Error('Selection mode must be best_moments or even');
+      error.status = 400;
+      throw error;
+    }
+    return mode;
+  }
+
+  // Real audience evidence: scenes that held viewers better once the long video is published.
+  async retentionByScene(bundle) {
+    const videoId = bundle.schedule?.youtube_id;
+    if (!videoId || !this.db.listRetentionSnapshots) return null;
+    const [snapshot] = await this.db.listRetentionSnapshots({ videoId, surface: 'long_form', limit: 1 });
+    const entries = (snapshot?.sceneMetrics || [])
+      .filter(metric => metric.id && Number.isFinite(Number(metric.averageRelativeRetention)))
+      .map(metric => [metric.id, Number(metric.averageRelativeRetention)]);
+    return entries.length ? new Map(entries) : null;
+  }
+
+  // The AI judges what the heuristics cannot: does the excerpt stand alone and pay off?
+  async aiRerank(moments, sourceTitle) {
+    const base = moments.map(moment => ({ ...moment, finalScore: moment.score10 }));
+    try {
+      const pool = base.slice(0, 10);
+      const prompt = `Você escolhe os melhores trechos de um vídeo do YouTube ("${sourceTitle}") para virarem Shorts.
+Dê nota de 0 a 10 a cada trecho (gancho nos primeiros segundos, faz sentido sozinho, tem recompensa/fecho) e escreva um título honesto de até 70 caracteres no idioma do trecho, sem prometer o que o trecho não entrega.
+${pool.map((moment, index) => `#${index} (${Math.round(moment.duration)}s): ${moment.text.slice(0, 600)}`).join('\n')}
+Responda apenas JSON: {"moments":[{"id":0,"score":8,"title":"..."}]}`;
+      const text = String(await this.aiTextService.generateText(prompt, { maxTokens: 1200, temperature: 0.3 }));
+      const parsed = JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1));
+      for (const item of Array.isArray(parsed.moments) ? parsed.moments : []) {
+        const moment = pool[Number(item?.id)];
+        const score = Number(item?.score);
+        if (!moment || !Number.isFinite(score)) continue;
+        moment.finalScore = Number((0.4 * moment.score10 + 0.6 * clamp(score, 0, 10)).toFixed(1));
+        const title = String(item.title || '').replace(/\s+/g, ' ').trim();
+        if (title && title.length <= 100) moment.aiTitle = title;
+      }
+    } catch (error) {
+      this.logger.warn(`AI re-ranking skipped, keeping heuristic scores: ${error.message}`);
+    }
+    return base;
+  }
+
+  async bestMomentSelections(bundle, scenes, count, input, sourceTitle) {
+    const number = async (key, fallback) => Number(await this.setting(key)) || fallback;
+    const minSeconds = clamp(input.minSeconds ?? await number('shorts_min_seconds', 20), 5, 120);
+    const maxSeconds = clamp(input.maxSeconds ?? await number('shorts_max_seconds', 58), minSeconds + 5, 180);
+    const { moments } = rankMoments(scenes, {
+      storyboard: bundle.script?.storyboard,
+      retention: await this.retentionByScene(bundle),
+      minSeconds, maxSeconds, limit: Math.max(count * 3, 8)
+    });
+    if (!moments.length) return [];
+
+    const useAI = input.useAI !== false && await this.setting('shorts_ai_rank') !== 'false' && this.hasAI() && moments.length > 1;
+    const ranked = useAI ? await this.aiRerank(moments, sourceTitle) : moments.map(moment => ({ ...moment, finalScore: moment.score10 }));
+    return ranked.sort((a, b) => b.finalScore - a.finalScore).slice(0, count).map(moment => ({
+      startSeconds: moment.startSeconds,
+      duration: moment.duration,
+      sceneIds: moment.sceneIds,
+      title: truncate(moment.aiTitle || sentence(moment.firstSentence) || sourceTitle, 96),
+      rationale: truncate(`Melhor momento (nota ${moment.finalScore}/10): ${moment.signals.join('; ') || 'trecho autocontido'}.`, 480),
+      narrationText: moment.text,
+      momentScore: moment.finalScore,
+      momentSignals: moment.signals,
+      mode: 'best_moments'
+    }));
   }
 
   async propose(productionId, input = {}) {
@@ -62,24 +149,43 @@ class ShortsRepurposingService {
     }
 
     const sourceTitle = bundle.editorData?.title || bundle.seo?.title || bundle.script?.title || bundle.strategy?.topic || 'Untitled video';
-    const windows = this.selectWindows(scenes, count);
+    const mode = await this.selectionMode(input);
+    const selections = mode === 'best_moments'
+      ? await this.bestMomentSelections(bundle, scenes, count, input, sourceTitle)
+      : [];
+    // Short or sparse videos may not hold enough separate best moments: fill the rest evenly spaced.
+    const moments = [...selections];
+    for (const window of this.selectWindows(scenes, count)) {
+      if (selections.length >= count) break;
+      if (moments.some(item => item.startSeconds === window.startSeconds && Math.abs(item.duration - window.duration) < 0.1)) continue;
+      const lead = window.scenes[0];
+      selections.push({
+        startSeconds: window.startSeconds,
+        duration: window.duration,
+        sceneIds: window.scenes.map(scene => scene.id),
+        title: truncate(sentence(lead.scriptText) || lead.label || sourceTitle, 96),
+        rationale: `Selected from ${window.scenes.map(scene => scene.label).join(', ')} as a self-contained vertical excerpt.`,
+        mode: 'even'
+      });
+    }
     const baseTime = this.nextPublishBase(bundle);
     const inheritedEvidence = this.inheritedEvidence(bundle);
-    const clips = windows.map((window, position) => {
-      const lead = window.scenes[0];
-      const hook = sentence(lead.scriptText) || lead.label || sourceTitle;
-      const title = truncate(hook, 96);
+    const clips = selections.map((selection, position) => {
       return {
         productionId,
         position,
-        title,
+        title: selection.title,
         description: truncate(`A quick takeaway from ${sourceTitle}. Watch the full video on this channel. #Shorts`, 5000),
         tags: [...new Set([...(bundle.seo?.tags || []), 'Shorts'])].slice(0, 15),
-        sourceSceneIds: window.scenes.map(scene => scene.id),
-        startSeconds: window.startSeconds,
-        duration: window.duration,
+        sourceSceneIds: selection.sceneIds,
+        startSeconds: selection.startSeconds,
+        duration: selection.duration,
         layout: position === 1 ? 'crop' : position === 2 ? 'stacked' : 'blur',
-        rationale: `Selected from ${window.scenes.map(scene => scene.label).join(', ')} as a self-contained vertical excerpt.`,
+        rationale: selection.rationale,
+        narrationText: selection.narrationText || null,
+        momentScore: selection.momentScore ?? null,
+        momentSignals: selection.momentSignals || [],
+        selectionMode: selection.mode,
         status: 'proposed',
         publishTime: new Date(baseTime.getTime() + position * 86400000).toISOString(),
         privacyStatus: 'private',
@@ -181,7 +287,9 @@ class ShortsRepurposingService {
     await fs.mkdir(directory, { recursive: true });
     const outputPath = path.join(directory, `${clip.id}.mp4`);
     const captionsPath = path.join(directory, `${clip.id}.srt`);
-    await fs.writeFile(captionsPath, this.buildCaptions(sourceScenes, clip.duration), 'utf8');
+    // Best-moment clips caption the exact sentences of the window instead of whole scenes.
+    const captionSource = clip.narrationText ? [{ scriptText: clip.narrationText }] : sourceScenes;
+    await fs.writeFile(captionsPath, this.buildCaptions(captionSource, clip.duration), 'utf8');
     await this.db.updateShortClip(clip.id, { status: 'rendering', error: null });
 
     try {
@@ -378,4 +486,4 @@ class ShortsRepurposingService {
   }
 }
 
-module.exports = { ShortsRepurposingService, LAYOUTS };
+module.exports = { ShortsRepurposingService, LAYOUTS, SELECTION_MODES };

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Added best-moment Shorts clipping: sentence-level windows of 20-58 s are scored on hook, concrete facts, questions, twists and endings, and the best non-overlapping moments become the drafts; published videos use real per-scene retention as the strongest signal and the AI can re-rank and title the finalists
+- Short drafts store their score, signals and exact narration, and their captions follow the clipped sentences; `mode: "even"` keeps the previous evenly spaced cut, and the dashboard has a selector for both
+- Storyboard headline and subheadline are now burned into the final video (lower-left, ASS through libass) on the first render and again after a scene rebuild; a failed render keeps the original video
+- New settings `shorts_selection_mode`, `shorts_min_seconds`, `shorts_max_seconds`, `shorts_ai_rank` and `director_render_overlays`
 - Added the YouTube Video Director (adapted from the Flow "AI Video Director" tool): every script is planned as a narration-aligned Hook / Re-hook / Meat / CTA storyboard with a re-hook every ~2 minutes, a style that rotates by niche and away from recent videos, a recurring cast and setting, per-shot camera, lighting and audio cues, and fact-based on-screen text data
 - Paid video clips now go to hooks, re-hooks and the CTA before any content shot; the scene manifest follows the storyboard and a generated clip attaches only to its own shot
 - Narration tone presets (impactante, cinematografico, storyteller, conversacional, persuasivo) are passed to OpenAI TTS as voice instructions; new `director_*` settings and `GET /api/content/:productionId/storyboard`
