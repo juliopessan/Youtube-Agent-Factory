@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Installed the HyperFrames agent skills (`hyperframes`, `hyperframes-cli`, `hyperframes-registry`, `media-use`) from heygen-com/hyperframes (Apache-2.0) under `.claude/skills`, pinned in `skills-lock.json`
 - Added best-moment Shorts clipping: sentence-level windows of 20-58 s are scored on hook, concrete facts, questions, twists and endings, and the best non-overlapping moments become the drafts; published videos use real per-scene retention as the strongest signal and the AI can re-rank and title the finalists
 - Short drafts store their score, signals and exact narration, and their captions follow the clipped sentences; `mode: "even"` keeps the previous evenly spaced cut, and the dashboard has a selector for both
 - Storyboard headline and subheadline are now burned into the final video (lower-left, ASS through libass) on the first render and again after a scene rebuild; a failed render keeps the original video
