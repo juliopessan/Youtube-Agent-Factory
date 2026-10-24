@@ -3512,8 +3512,8 @@ class SystemTest {
         const log = await runFFmpeg(['-hide_banner', '-ss', String(second), '-i', output, '-frames:v', '1', '-vf', 'signalstats,metadata=print:key=lavfi.signalstats.YAVG', '-an', '-f', 'null', '-']).then(r => String(r.stderr), e => String(e.stderr));
         return Number(/YAVG=([\d.]+)/.exec(log)?.[1]);
       };
-      // Light pastel backdrops, and no dip to black in the middle of a crossfade
-      for (const second of [5, 14.8, 30]) if (!(await luma(second) > 60)) throw new Error(`The ambient picture must stay light, also mid-crossfade (t=${second})`);
+      // Dim backdrops for a dark room (mean luma 30-60), and no dip to black (16) in the middle of a crossfade
+      for (const second of [5, 14.8, 30]) if (!(await luma(second) > 26)) throw new Error(`The ambient picture must stay visible, also mid-crossfade (t=${second})`);
 
       // The gate for this profile
       const gate = new EditSopService({ getSetting: async () => 'false' }).evaluate({ assets: { finalVideo: { edit: evidence, delivery: { name: '20261024_01_calm-down-music.mp4' } } } });
