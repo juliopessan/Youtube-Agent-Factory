@@ -51,6 +51,7 @@ class SystemTest {
       { name: 'Dark Channel Mining', test: () => this.testChannelMining() },
       { name: 'Niche Validation and Positioning', test: () => this.testNicheIntelligence() },
       { name: 'Inauthentic Content Compliance Checklist', test: () => this.testComplianceChecklist() },
+      { name: 'YouTube Video Director Storyboard', test: () => this.testVideoDirector() },
       { name: 'Walkthrough Module', test: () => this.testWalkthroughModule() },
       { name: 'Logger System', test: () => this.testLogger() },
       { name: 'Directory Structure', test: () => this.testDirectories() },
@@ -2919,6 +2920,95 @@ class SystemTest {
     this.logger.info('Compliance checklist test completed successfully');
   }
 
+  async testVideoDirector() {
+    const { VideoDirectorService, splitIntoChunks, VISUAL_STYLES } = require('./utils/video-director-service');
+    const { MediaGenerationService } = require('./utils/media-generation-service');
+    const { scriptScenes, buildInitialSceneManifest } = require('./utils/scene-repair-service');
+
+    const sentences = (prefix, count) => Array.from({ length: count }, (_, i) => `${prefix} ${i + 1} mostra como o colapso do império avançou com causas profundas e consequências duradouras.`).join(' ');
+    const script = {
+      title: 'A queda do império',
+      keywords: ['história', 'império'],
+      hook: { text: 'Em 1453 uma única muralha mudou o mundo para sempre.', duration: '0:00-0:05' },
+      introduction: { greeting: '', topicIntro: sentences('Contexto', 3), valueProposition: '', credibility: '' },
+      mainContent: { sections: [
+        { title: 'As causas', content: sentences('Causa', 30) },
+        { title: 'O cerco', content: `Em 1453 o cerco durou 53 dias. ${sentences('Cerco', 28)}` },
+        { title: 'O legado', content: sentences('Legado', 30) }
+      ] },
+      conclusion: { recap: [sentences('Resumo', 2)], finalThought: 'A história continua a nos ensinar.' },
+      callToAction: { subscribe: 'Inscreva-se para a próxima história.' }
+    };
+
+    const director = new VideoDirectorService(null);
+    const board = await director.createStoryboard(script, { maxGeneratedSeconds: 24, clipSeconds: 8, recentStyles: [] });
+    const roles = board.shots.map(shot => shot.narrativeRole);
+
+    // Retention architecture: Hook first, CTA last, a re-hook closing the intro and one every ~2 minutes
+    if (roles[0] !== 'hook' || roles[roles.length - 1] !== 'cta') throw new Error(`Hook must open and CTA must close: ${roles.slice(0, 3)}…${roles.slice(-2)}`);
+    if (roles.filter(role => role === 'rehook').length < 3) throw new Error('A long video needs the intro re-hook plus cadence re-hooks');
+    if (board.summary.totalSeconds < 300 || board.shots.some(shot => shot.durationSec > 40)) throw new Error('Shots must stay short and add up to the narration length');
+    if (splitIntoChunks('Sem pontuação final', 5).length !== 1) throw new Error('Unpunctuated text must stay in one chunk');
+
+    // Paid clips go to hooks and re-hooks before any meat shot
+    const generated = board.shots.filter(shot => shot.generate);
+    if (generated.length !== 3 || generated.some(shot => shot.narrativeRole === 'meat') || !generated.some(shot => shot.narrativeRole === 'hook')) {
+      throw new Error(`Budget must go to retention shots first: ${generated.map(shot => shot.narrativeRole)}`);
+    }
+    if (board.summary.generatedSeconds !== 24) throw new Error('Generated seconds must match the budget');
+
+    // Prompts: style, no on-screen text, bounded length; overlays only for concrete facts
+    if (board.shots.some(shot => !shot.prompt.includes(VISUAL_STYLES[board.style].descriptor) || !shot.prompt.includes('No readable text') || shot.prompt.length > 1800)) throw new Error('Every prompt must carry the style and forbid on-screen text');
+    const overlay = board.shots.find(shot => shot.showTextOverlay);
+    if (!overlay || overlay.headline !== '1453' || board.shots[0].showTextOverlay) throw new Error('Overlays must come from concrete facts and never sit on the hook');
+
+    // Style rotation avoids the latest videos' look
+    if (director.chooseStyle('auto', 'Finanças', ['cinematic']) === 'cinematic') throw new Error('Style must rotate away from the previous video');
+    if (director.chooseStyle('noir', 'Finanças', ['noir']) !== 'noir') throw new Error('An explicit style must be honored');
+    if (director.chooseStyle('invalid', 'História / Mistérios', []) !== 'noir') throw new Error('An invalid style must fall back to the niche default');
+
+    // AI enrichment adds the cast and keeps the plan when the answer is unusable
+    const aiDirector = new VideoDirectorService(null, { aiTextService: { client: {}, generateText: async () => JSON.stringify({
+      characters: [{ id: 'c1', name: 'The Emperor', description: 'a lone figure in a dark crimson cloak' }],
+      environments: [{ id: 'e1', name: 'Fallen city', description: 'burning rooftops at dusk' }],
+      shots: [{ id: 'shot_001', visualDescription: 'A cloaked figure faces a crumbling wall', cameraMovement: 'fast push-in', charactersPresent: ['c1', 'ghost'] }]
+    }) } });
+    const enriched = await aiDirector.createStoryboard(script, { recentStyles: [] });
+    if (enriched.shots[0].charactersPresent.join() !== 'c1' || !enriched.shots[0].prompt.includes('Recurring subjects') || !enriched.shots[0].prompt.includes('Setting: Fallen city')) {
+      throw new Error('AI cast and setting must reach the shot prompt, dropping unknown characters');
+    }
+    const brokenAI = new VideoDirectorService(null, { aiTextService: { client: {}, generateText: async () => 'not json' } });
+    if (!(await brokenAI.createStoryboard(script, { recentStyles: [] })).shots.length) throw new Error('A broken AI answer must keep the deterministic plan');
+
+    // Settings: the pipeline hook can be switched off and never throws
+    const settings = { director_enabled: 'false' };
+    const gated = new VideoDirectorService({ getSetting: async key => settings[key] ?? null });
+    if ((await gated.applyToScript(script)).storyboard) throw new Error('director_enabled=false must leave the script untouched');
+    settings.director_enabled = 'true';
+    const applied = await gated.applyToScript(script);
+    if (applied.storyboard?.format !== 'long' || applied.title !== script.title) throw new Error('The storyboard must be attached to the script');
+
+    // Shorts: 9:16 with fast cadence; long scripts are flagged as exceeding the Shorts limit
+    const shortScript = { title: 'Fato rápido', hook: { text: 'Ninguém percebeu isso em 1969.' }, mainContent: { sections: [{ title: 'Fato', content: 'A missão levou 4 dias. O resultado mudou tudo.' }] }, callToAction: { subscribe: 'Siga para mais.' } };
+    const short = await director.createStoryboard(shortScript, { format: 'short', recentStyles: [] });
+    if (short.aspectRatio !== '9:16' || short.summary.exceedsFormatLimit) throw new Error('A short script must fit the 9:16 Shorts format');
+    if (!(await director.createStoryboard(script, { format: 'short', recentStyles: [] })).summary.exceedsFormatLimit) throw new Error('A long script must exceed the Shorts limit');
+
+    // Integration: clip planner and scene manifest follow the storyboard
+    const withBoard = { ...script, storyboard: board };
+    if (scriptScenes(withBoard).length !== board.shots.length) throw new Error('The scene manifest must follow the storyboard shots');
+    const plan = new MediaGenerationService(null, {}).buildScenePlan(withBoard, [], { clipDuration: 8, maxGeneratedSeconds: 24 });
+    if (plan.length !== 3 || plan.map(scene => scene.label).join() !== generated.map(shot => shot.label).join()) throw new Error('Clip plan must use the generated shots in story order');
+    const manifest = buildInitialSceneManifest(
+      { script: withBoard, estimatedDuration: '8:00', assets: { audio: { simulated: true } } },
+      { actualProvider: 'google_omni', scenes: [{ label: generated[1].label, path: 'clip.mp4', provider: 'google_omni', duration: 8 }] }
+    );
+    const withClip = manifest.filter(scene => scene.assetType === 'video');
+    if (withClip.length !== 1 || withClip[0].label !== generated[1].label) throw new Error('A clip must attach only to its own shot, not to the shot at the same position');
+
+    this.logger.info('Video director test completed successfully');
+  }
+
   async testWalkthroughModule() {
     const { SetupWalkthrough, AI_PROVIDER_GUIDE, VIDEO_PROVIDER_GUIDE } = require('./walkthrough');
     const { PROVIDERS, GEMINI_MODELS, GEMINI_DEFAULT_MODEL } = require('./utils/ai-text-service');
@@ -3053,6 +3143,7 @@ class SystemTest {
       './agents/analytics-optimization-agent',
       './agents/channel-mining-agent',
       './utils/compliance-service',
+      './utils/video-director-service',
       './utils/discoverability-service',
       './utils/discoverability-adapters/darkzseo'
     ];

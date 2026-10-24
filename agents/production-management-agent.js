@@ -427,7 +427,9 @@ class ProductionManagementAgent {
       const ttsText = await fs.readFile(productionData.assets.script.ttsPath, 'utf8');
       
       // Generate audio using AI TTS and retain the provider evidence returned by the generator.
-      const generatedPath = await this.aiVideoGenerator.generateTTSAudio(ttsText, audioPath);
+      const generatedPath = await this.aiVideoGenerator.generateTTSAudio(ttsText, audioPath, {
+        instructions: productionData.script?.storyboard?.narration?.instructions
+      });
       const evidence = this.aiVideoGenerator.lastNarrationResult || {};
       const usable = await this.aiVideoGenerator.isUsableAudioFile(generatedPath);
 

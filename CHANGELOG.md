@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added the YouTube Video Director (adapted from the Flow "AI Video Director" tool): every script is planned as a narration-aligned Hook / Re-hook / Meat / CTA storyboard with a re-hook every ~2 minutes, a style that rotates by niche and away from recent videos, a recurring cast and setting, per-shot camera, lighting and audio cues, and fact-based on-screen text data
+- Paid video clips now go to hooks, re-hooks and the CTA before any content shot; the scene manifest follows the storyboard and a generated clip attaches only to its own shot
+- Narration tone presets (impactante, cinematografico, storyteller, conversacional, persuasivo) are passed to OpenAI TTS as voice instructions; new `director_*` settings and `GET /api/content/:productionId/storyboard`
 - Added a dark channel mining agent (`npm run agent:mining`, `POST /api/mining/run`) that reproduces the manual research routine (video, 20+ minutes, this week) and rates each channel's multilingual opportunity
 - Added niche and micro-niche validation with RPM per niche, a multilingual outlier plan per language gap, and positioning and differentiation analysis (`POST /api/mining/strategy`)
 - Added the Modelo 2 compliance checklist (Fórmula YouTube, M05 A02) to the quality gate: direct-hook, originality, fact, variation, natural-voice, audio-touch, visual-template and upload-volume checks, plus `GET /api/content/:productionId/compliance`

@@ -29,6 +29,7 @@ const { GrowthExperimentService } = require('./utils/growth-experiment-service')
 const { AITextService } = require('./utils/ai-text-service');
 const { DiscoverabilityService } = require('./utils/discoverability-service');
 const { ComplianceService } = require('./utils/compliance-service');
+const { VideoDirectorService, VISUAL_STYLES, VOICE_TONES } = require('./utils/video-director-service');
 const { version } = require('./package.json');
 const chalk = require('chalk');
 
@@ -54,6 +55,7 @@ class YouTubeAutomationAgent {
     this.experiments = null;
     this.discoverability = null;
     this.compliance = null;
+    this.director = null;
     this.setupRequired = false;
   }
 
@@ -72,6 +74,7 @@ class YouTubeAutomationAgent {
         updateJobStage: (...args) => this.updateJobStage(...args)
       });
       this.compliance = new ComplianceService(this.db, { logger: this.logger });
+      this.director = new VideoDirectorService(this.db, { logger: this.logger });
       this.operator = new OperatorService(this.db, { compliance: this.compliance });
       this.provenance = new ProvenanceService(this.db);
       this.discoverability = new DiscoverabilityService(this.db, { logger: this.logger });
@@ -107,7 +110,9 @@ class YouTubeAutomationAgent {
       // Initialize agents
       this.logger.info('Initializing agents...');
       await this.initializeAgents();
-      this.compliance.setAIService(new AITextService(this.credentials?.credentials || {}));
+      const directorAI = new AITextService(this.credentials?.credentials || {});
+      this.compliance.setAIService(directorAI);
+      this.director.setAIService(directorAI);
       this.scenes = this.agents.production?.sceneRepair || new SceneRepairService(
         this.db,
         this.agents.production?.aiVideoGenerator,
@@ -789,6 +794,13 @@ class YouTubeAutomationAgent {
       }
     });
 
+    this.app.get('/api/content/:productionId/storyboard', async (req, res) => {
+      const bundle = await this.db.getProductionBundle(req.params.productionId);
+      if (!bundle) return res.status(404).json({ error: 'Content not found' });
+      if (!bundle.script?.storyboard) return res.status(404).json({ error: 'No storyboard was planned for this content' });
+      return res.json({ success: true, result: bundle.script.storyboard });
+    });
+
     this.app.get('/api/content/:productionId/compliance', async (req, res) => {
       const bundle = await this.db.getProductionBundle(req.params.productionId);
       if (!bundle) return res.status(404).json({ error: 'Content not found' });
@@ -1285,9 +1297,18 @@ class YouTubeAutomationAgent {
     });
 
     this.app.put('/api/settings', protect, async (req, res) => {
-      const allowed = ['approval_required', 'notification_enabled', 'channel_timezone', 'max_daily_posts', 'content_buffer_days', 'compliance_strict', 'compliance_auto_fix_hook'];
+      const allowed = ['approval_required', 'notification_enabled', 'channel_timezone', 'max_daily_posts', 'content_buffer_days', 'compliance_strict', 'compliance_auto_fix_hook', 'director_enabled', 'director_ai_enrich'];
       for (const key of allowed) {
         if (req.body?.[key] !== undefined) await this.db.setSetting(key, String(req.body[key]));
+      }
+      if (req.body?.director_visual_style !== undefined) {
+        const styleId = req.body.director_visual_style;
+        if (styleId !== 'auto' && !VISUAL_STYLES[styleId]) return res.status(400).json({ error: 'Unsupported director visual style' });
+        await this.db.setSetting('director_visual_style', styleId);
+      }
+      if (req.body?.director_voice_tone !== undefined) {
+        if (!VOICE_TONES[req.body.director_voice_tone]) return res.status(400).json({ error: 'Unsupported director voice tone' });
+        await this.db.setSetting('director_voice_tone', req.body.director_voice_tone);
       }
       const provider = req.body?.video_provider;
       if (provider !== undefined) {
@@ -1534,7 +1555,7 @@ class YouTubeAutomationAgent {
       jobId,
       'script',
       25,
-      async () => this.applyScriptCompliance(await this.agents.scriptWriter.generateScript(strategy))
+      async () => this.applyDirector(await this.applyScriptCompliance(await this.agents.scriptWriter.generateScript(strategy)))
     );
     this.logger.info(`Script generated: ${script.title}`);
 
@@ -1780,6 +1801,11 @@ class YouTubeAutomationAgent {
       reviewNotes: reviewNotes || (quality.passed ? null : `Blocking checks failed: ${quality.blockingFailures.join(', ')}`),
       reviewedAt: null
     });
+  }
+
+  // Plans the Hook / Re-hook / Meat / CTA storyboard; falls back to the plain script on any failure.
+  async applyDirector(script) {
+    return this.director ? this.director.applyToScript(script) : script;
   }
 
   // Pre-recording compliance: replace a generic preamble with a direct hook before the script is checkpointed.

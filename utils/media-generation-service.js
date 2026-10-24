@@ -36,6 +36,23 @@ class MediaGenerationService {
   listProviders() { return this.registry.list(); }
 
   buildScenePlan(script = {}, visualAssets = [], settings = {}) {
+    // Director storyboard: paid clips go to the shots with the highest retention impact, in story order.
+    if (script.storyboard?.shots?.length) {
+      const slots = Math.max(0, Math.floor(Number(settings.maxGeneratedSeconds || 0) / Number(settings.clipDuration || 8)));
+      return script.storyboard.shots.filter(shot => shot.generate)
+        .sort((a, b) => b.priority - a.priority || a.sceneNumber - b.sceneNumber)
+        .slice(0, slots)
+        .sort((a, b) => a.sceneNumber - b.sceneNumber)
+        .map((shot, index) => ({
+          label: shot.label,
+          prompt: shot.prompt,
+          index,
+          duration: Number(settings.clipDuration || 8),
+          firstFrame: visualAssets[index % Math.max(1, visualAssets.length)] || null,
+          referenceImages: []
+        }));
+    }
+
     const prompts = [];
     if (script.hook?.text || script.title) {
       prompts.push({

@@ -59,7 +59,7 @@ class AIVideoGenerator {
       : null);
   }
 
-  async generateTTSAudio(text, outputPath) {
+  async generateTTSAudio(text, outputPath, options = {}) {
     this.logger.info('Generating TTS audio...');
     this.lastNarrationResult = null;
     let provider = 'simulation';
@@ -74,7 +74,7 @@ class AIVideoGenerator {
       } else if (this.openai) {
         provider = 'openai';
         model = 'gpt-4o-mini-tts';
-        generatedPath = await this.generateOpenAITTS(text, outputPath);
+        generatedPath = await this.generateOpenAITTS(text, outputPath, options.instructions);
       } else if (this.gemini) {
         provider = 'gemini';
         model = process.env.GEMINI_TTS_MODEL || 'gemini-3.1-flash-tts-preview';
@@ -144,12 +144,13 @@ class AIVideoGenerator {
     });
   }
 
-  async generateOpenAITTS(text, outputPath) {
+  async generateOpenAITTS(text, outputPath, instructions) {
     const response = await this.openai.audio.speech.create({
       model: "gpt-4o-mini-tts",
       voice: "coral",
       input: text,
-      speed: 1.0
+      speed: 1.0,
+      ...(instructions ? { instructions } : {})
     });
 
     const buffer = Buffer.from(await response.arrayBuffer());

@@ -17,6 +17,9 @@ function textFromSection(section = {}) {
 }
 
 function scriptScenes(script = {}) {
+  if (script.storyboard?.shots?.length) {
+    return script.storyboard.shots.map(shot => ({ label: shot.label, scriptText: shot.narrationScript, prompt: shot.prompt }));
+  }
   const scenes = [];
   if (script.hook?.text || script.title) {
     scenes.push({
@@ -85,7 +88,9 @@ function buildInitialSceneManifest(production = {}, providerResult = {}) {
     : audio.simulated || audio.status === 'unavailable' ? 'unavailable' : 'current';
 
   return blueprints.map((scene, position) => {
-    const generatedScene = generated.find(item => String(item.label || '').toLowerCase() === scene.label.toLowerCase()) || generated[position];
+    // With a storyboard only a subset of shots is generated, so positions no longer line up with clips.
+    const generatedScene = generated.find(item => String(item.label || '').toLowerCase() === scene.label.toLowerCase()) ||
+      (production.script?.storyboard ? null : generated[position]);
     const imagePath = visualAssets[position % Math.max(1, visualAssets.length)] || null;
     const assetPath = generatedScene?.path || imagePath;
     const assetType = generatedScene?.path ? 'video' : imagePath ? 'image' : 'missing';
